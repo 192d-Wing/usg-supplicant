@@ -811,9 +811,9 @@ checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 
 [[package]]
 name = "usg-fips-tls"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "249e1baa7c508ff49a8a503c2c7f71b474b00ae6c814f5c4c359ec427ea35aab"
+checksum = "36dcebb2a247625ace785220a9e648680d87c85f25fb5f053d55a1149d8736d6"
 dependencies = [
  "aws-lc-rs",
  "rustls",
