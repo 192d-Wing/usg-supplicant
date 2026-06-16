@@ -43,6 +43,9 @@ pub mod os_fips;
 /// The `EAPHost` peer-method C-ABI exports (the DLL `dot3svc` loads).
 #[cfg(windows)]
 pub mod peer;
+/// Register / unregister the peer method in the Windows registry.
+#[cfg(windows)]
+pub mod register;
 pub mod session;
 pub mod session_registry;
 
