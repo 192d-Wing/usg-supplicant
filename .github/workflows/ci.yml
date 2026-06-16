@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancel superseded runs on the same ref.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # Treat warnings as errors. Cargo caps lints to `allow` for registry deps, so
+  # this only bites our own workspace crates (and keeps clippy::pedantic at the
+  # `warn` level set in each crate's [lints] table). This is what catches e.g. a
+  # Windows-only unused import that is invisible from a Linux-only build.
+  RUSTFLAGS: -D warnings
+
+jobs:
+  # Dev (non-FIPS) build + test across Linux and Windows. The Windows leg is what
+  # actually compiles the #[cfg(windows)] FFI in creds::cng / pac::dpapi.
+  test:
+    name: build & test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust 1.95.0
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.95.0
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      # aws-lc-sys (the non-FIPS provider) builds its x86_64 asm with NASM.
+      # CMake and a C toolchain are already on both runner images.
+      - name: Install NASM (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y nasm
+
+      - name: Install NASM (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/setup-nasm@v1
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets --workspace
+
+      - name: Test
+        run: cargo test --workspace

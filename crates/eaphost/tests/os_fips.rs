@@ -2,6 +2,7 @@
 //! (On Windows these would assert against the real registry; here we verify the
 //! non-Windows fail-closed contract.)
 
+#[cfg(not(windows))]
 use eaphost::error::EapHostError;
 use eaphost::os_fips::{assert_fips_policy, fips_policy_enabled};
 
