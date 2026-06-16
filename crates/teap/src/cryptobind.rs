@@ -9,6 +9,11 @@ use crate::error::CryptoBindError;
 use crate::keyschedule::{Cmk, TeapMac};
 use crate::tlv::CryptoBindingTlv;
 
+/// Crypto-Binding sub-type: server→peer Binding Request.
+pub const CB_SUBTYPE_REQUEST: u8 = 1;
+/// Crypto-Binding sub-type: peer→server Binding Response.
+pub const CB_SUBTYPE_RESPONSE: u8 = 2;
+
 /// Constant-time equality. Runs in time dependent only on `a.len()`, never on
 /// content, and is independent of where the first mismatch occurs.
 #[must_use]

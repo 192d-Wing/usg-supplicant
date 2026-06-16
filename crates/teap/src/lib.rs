@@ -17,4 +17,5 @@
 pub mod cryptobind;
 pub mod error;
 pub mod keyschedule;
+pub mod session;
 pub mod tlv;
