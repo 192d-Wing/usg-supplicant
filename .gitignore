@@ -1,0 +1,6 @@
+/target
+**/*.rs.bk
+*.pdb
+Cargo.lock.orig
+.DS_Store
+# Keep Cargo.lock for the binary/DLL crates (committed for reproducible FIPS builds)

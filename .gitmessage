@@ -1,0 +1,20 @@
+# <type>(<scope>): <subject>   (<=72 chars, imperative, no trailing period)
+#
+# <body: what & why, wrap at 72>
+#
+# <footer: BREAKING CHANGE: ... / Refs: ...>
+#
+# Conventional Commits 1.0.0 — types:
+#   feat     a new feature
+#   fix      a bug fix
+#   docs     documentation only
+#   test     adding/correcting tests
+#   refactor neither fixes a bug nor adds a feature
+#   perf     performance improvement
+#   build    build system / deps
+#   ci       CI configuration
+#   chore    other (no src or test change)
+#   security a security-relevant change (fix/hardening)
+#
+# scopes (this repo): teap, eap-core, fips-tls, creds, pac, eaphost,
+#                     eaphost-config, cli, kat, workspace, docs
