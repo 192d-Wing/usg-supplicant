@@ -3,4 +3,6 @@
 *.pdb
 Cargo.lock.orig
 .DS_Store
+# Local multi-root IDE workspace files
+*.code-workspace
 # Keep Cargo.lock for the binary/DLL crates (committed for reproducible FIPS builds)
