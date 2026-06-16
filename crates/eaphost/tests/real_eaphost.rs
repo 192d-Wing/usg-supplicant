@@ -18,12 +18,20 @@
 //!   cargo test -p eaphost --test real_eaphost -- --ignored --nocapture
 //! ```
 //!
-//! NOTE: the full packet relay (`EapHostPeerProcessReceivedPacket` onward)
-//! returns `ERROR_PROC_NOT_FOUND` — our method DLL exports exactly the two
-//! by-name symbols the SDK mandates (`EapPeerGetInfo`, `EapPeerFreeErrorMemory`),
-//! so the missing proc is in the **config DLL** (`PeerConfigDllPath`, §4.1 step
-//! 4: `EapPeerConfigXml2Blob` / `EapPeerGetConfigBlobAndUserBlob` …) which we
-//! have not built yet. Completing the live packet flow is gated on that DLL.
+//! NOTE: the full packet relay (`EapHostPeerProcessReceivedPacket` onward) no
+//! longer fails with `ERROR_PROC_NOT_FOUND` — the DLL now exports the
+//! config-method entry points the host resolves by name
+//! (`EapPeerGetMethodProperties` / `EapPeerGetConfigBlobAndUserBlob` /
+//! `EapPeerFreeMemory`), so the live host reaches packet processing. The
+//! remaining gap is the EAP **Identity** stage: a host-API session aborts the
+//! first received packet with `EAP_E_EAPHOST_IDENTITY_UNKNOWN` (`0x80420014`).
+//! The host peer builds the EAP-Response/Identity from a connection
+//! configuration **it can parse**, not from the method's `EapPeerGetIdentity`
+//! (verified: with a registered `PeerIdentityPath` and a by-name
+//! `EapPeerGetIdentity`, the host never calls it on this path). Completing the
+//! live packet flow therefore needs an `EAPHost` connection profile carrying the
+//! identity (the config-DLL `EapHostPeerConfigXml2Blob` path, §4.1 step 4) — the
+//! next major piece.
 #![cfg(windows)]
 #![allow(
     clippy::unwrap_used,

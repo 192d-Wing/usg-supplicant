@@ -28,9 +28,9 @@ use std::sync::OnceLock;
 
 use windows::Win32::Foundation::{ERROR_NOT_SUPPORTED, ERROR_SUCCESS, HANDLE};
 use windows::Win32::Security::ExtensibleAuthenticationProtocol::{
-    EAP_ERROR, EAP_PEER_METHOD_ROUTINES, EAP_TYPE, EapPacket, EapPeerMethodOutput,
-    EapPeerMethodResponseActionResult, EapPeerMethodResponseActionSend, EapPeerMethodResult,
-    EapPeerMethodResultReason,
+    EAP_ERROR, EAP_METHOD_PROPERTY_ARRAY, EAP_METHOD_TYPE, EAP_PEER_METHOD_ROUTINES, EAP_TYPE,
+    EapCredential, EapPacket, EapPeerMethodOutput, EapPeerMethodResponseActionResult,
+    EapPeerMethodResponseActionSend, EapPeerMethodResult, EapPeerMethodResultReason,
 };
 
 use creds::selection::CertSelector;
@@ -60,6 +60,11 @@ static EAP_TYPE_VALUE: EAP_TYPE = EAP_TYPE {
 const NOT_SUPPORTED: u32 = ERROR_NOT_SUPPORTED.0;
 /// Generic failure for a routine that cannot complete (fail closed).
 const E_FAIL: u32 = 0x8000_4005; // E_FAIL-ish; EAPHost only needs nonzero.
+
+/// The EAP-Response/Identity we present in the outer exchange. TEAP protects the
+/// real identity (the inner EAP-TLS client certificate) inside the TLS tunnel, so
+/// the cleartext outer identity is deliberately anonymous.
+const ANONYMOUS_IDENTITY: &str = "anonymous";
 
 /// The process-global session table the routines marshal into.
 fn registry() -> &'static SessionRegistry<supplicant::driver::TeapDriver> {
@@ -137,6 +142,94 @@ pub unsafe extern "system" fn EapPeerGetInfo(
 /// allocates an `EAP_ERROR` (so `EAPHost` never has one of ours to free here).
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn EapPeerFreeErrorMemory(_p_eap_error: *mut EAP_ERROR) {}
+
+// ---------------------------------------------------------------------------
+// Config-method exports. EAPHost loads the configuration entry points from the
+// same `PeerDllPath` DLL (there is no separate config-DLL registry value for the
+// core APIs — only `PeerConfigUIPath` for the optional UI). Even a method whose
+// connection data is supplied directly to `BeginSession` must export these or
+// EAPHost aborts the session with `ERROR_PROC_NOT_FOUND`. We carry no extra
+// properties and derive no blobs from credentials, so they report empty.
+// ---------------------------------------------------------------------------
+
+/// Report the method's connection/user properties. We declare none (our
+/// connection data is the `BeginSession` config blob), so return an empty array.
+///
+/// # Safety
+/// FFI export called by `EAPHost`. `p_method_property_array` must be a valid,
+/// writable `EAP_METHOD_PROPERTY_ARRAY`; `pp_eap_error` (if non-null) a writable
+/// `*mut EAP_ERROR`. All other pointers are unused.
+#[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "system" fn EapPeerGetMethodProperties(
+    _dw_version: u32,
+    _dw_flags: u32,
+    _eap_method_type: EAP_METHOD_TYPE,
+    _h_user_impersonation_token: HANDLE,
+    _cb_connection_data: u32,
+    _p_connection_data: *const u8,
+    _cb_user_data: u32,
+    _p_user_data: *const u8,
+    p_method_property_array: *mut EAP_METHOD_PROPERTY_ARRAY,
+    pp_eap_error: *mut *mut EAP_ERROR,
+) -> u32 {
+    unsafe { clear_error(pp_eap_error) };
+    if p_method_property_array.is_null() {
+        return E_FAIL;
+    }
+    // Empty, heap-free property set: zero count, null array. EAPHost reads the
+    // count first and never dereferences the pointer when the count is zero.
+    unsafe {
+        (*p_method_property_array).dwNumberOfProperties = 0;
+        (*p_method_property_array).pMethodProperty = core::ptr::null_mut();
+    }
+    ERROR_SUCCESS.0
+}
+
+/// Derive the connection/user blobs from a credential. We take our connection
+/// data directly from the `BeginSession` config blob and read no credential
+/// here, so return empty blobs (zero size, null pointers).
+///
+/// # Safety
+/// FFI export called by `EAPHost`. The four out-params, when non-null, must be
+/// writable; `pp_eap_error` (if non-null) a writable `*mut EAP_ERROR`.
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn EapPeerGetConfigBlobAndUserBlob(
+    _dw_flags: u32,
+    _eap_method_type: EAP_METHOD_TYPE,
+    _eap_credential: EapCredential,
+    pdw_config_blob_size: *mut u32,
+    pp_config_blob: *mut *mut u8,
+    pdw_user_blob_size: *mut u32,
+    pp_user_blob: *mut *mut u8,
+    pp_eap_error: *mut *mut EAP_ERROR,
+) -> u32 {
+    unsafe { clear_error(pp_eap_error) };
+    unsafe {
+        if !pdw_config_blob_size.is_null() {
+            *pdw_config_blob_size = 0;
+        }
+        if !pp_config_blob.is_null() {
+            *pp_config_blob = core::ptr::null_mut();
+        }
+        if !pdw_user_blob_size.is_null() {
+            *pdw_user_blob_size = 0;
+        }
+        if !pp_user_blob.is_null() {
+            *pp_user_blob = core::ptr::null_mut();
+        }
+    }
+    ERROR_SUCCESS.0
+}
+
+/// Free memory previously returned by a configuration API. We never allocate via
+/// those APIs (every blob/property set is empty), so this is a no-op.
+///
+/// # Safety
+/// FFI export called by `EAPHost`. The argument is ignored — this method hands
+/// out no configuration-API allocations for `EAPHost` to free here.
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn EapPeerFreeMemory(_p_ui_context_data: *mut c_void) {}
 
 /// Per-DLL initialization. Gates on the OS FIPS policy and fails closed when the
 /// host is not in FIPS mode (DESIGN §3 — the CNG/smartcard signing half of the
@@ -312,24 +405,77 @@ extern "system" fn EapPeerEndSession(
     ERROR_SUCCESS.0
 }
 
-// --- Routines this method does not implement: fail closed / not supported. ---
-
-extern "system" fn EapPeerGetIdentity(
+/// Provide the outer EAP identity. `EAPHost` calls this (by name, on the
+/// `PeerIdentityPath` DLL, *and* via the routine table) to build the
+/// EAP-Response/Identity before the method exchange; without it the host aborts
+/// with `EAP_E_EAPHOST_IDENTITY_UNKNOWN`. We present an anonymous identity, no UI,
+/// and no persisted user data (our session config rides on the connection blob).
+///
+/// # Safety
+/// FFI export called by `EAPHost`. The out-params, when non-null, must be
+/// writable; `ppwsz_identity` receives a `LocalAlloc`-owned string `EAPHost` frees
+/// with `LocalFree`.
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn EapPeerGetIdentity(
     _flags: u32,
     _cb_connection_data: u32,
     _p_connection_data: *const u8,
     _cb_user_data: u32,
     _p_user_data: *const u8,
     _h_token: HANDLE,
-    _pf_invoke_ui: *mut windows::core::BOOL,
-    _pdw_user_data_out: *mut u32,
-    _pp_user_data_out: *mut *mut u8,
-    _ppwsz_identity: *mut windows::core::PWSTR,
+    pf_invoke_ui: *mut windows::core::BOOL,
+    pdw_user_data_out: *mut u32,
+    pp_user_data_out: *mut *mut u8,
+    ppwsz_identity: *mut windows::core::PWSTR,
     pp_eap_error: *mut *mut EAP_ERROR,
 ) -> u32 {
     unsafe { clear_error(pp_eap_error) };
-    NOT_SUPPORTED
+    if ppwsz_identity.is_null() {
+        return E_FAIL;
+    }
+    // Initialize every out-param up front (no UI prompt, no user-data blob to
+    // carry into BeginSession, and a defined identity pointer) so the fallible
+    // allocation below never leaves one indeterminate on the error path.
+    unsafe {
+        *ppwsz_identity = windows::core::PWSTR::null();
+        if !pf_invoke_ui.is_null() {
+            *pf_invoke_ui = false.into();
+        }
+        if !pdw_user_data_out.is_null() {
+            *pdw_user_data_out = 0;
+        }
+        if !pp_user_data_out.is_null() {
+            *pp_user_data_out = core::ptr::null_mut();
+        }
+    }
+    match local_alloc_wide(ANONYMOUS_IDENTITY) {
+        Some(p) => {
+            unsafe { *ppwsz_identity = windows::core::PWSTR(p) };
+            ERROR_SUCCESS.0
+        }
+        None => E_FAIL,
+    }
 }
+
+/// Allocate a NUL-terminated UTF-16 copy of `s` with `LocalAlloc` — the allocator
+/// `EAPHost` frees method-returned strings with (`LocalFree`). Returns the buffer,
+/// or `None` on overflow or allocation failure.
+fn local_alloc_wide(s: &str) -> Option<*mut u16> {
+    use windows::Win32::System::Memory::{LMEM_FIXED, LMEM_ZEROINIT, LocalAlloc};
+    let utf16: Vec<u16> = s.encode_utf16().chain(core::iter::once(0)).collect();
+    let bytes = utf16.len().checked_mul(size_of::<u16>())?;
+    // SAFETY: LMEM_ZEROINIT zero-fills `bytes`; we then copy exactly `utf16.len()`
+    // u16s (= `bytes`) into the allocation.
+    let h = unsafe { LocalAlloc(LMEM_FIXED | LMEM_ZEROINIT, bytes) }.ok()?;
+    let p = h.0.cast::<u16>();
+    if p.is_null() {
+        return None;
+    }
+    unsafe { core::ptr::copy_nonoverlapping(utf16.as_ptr(), p, utf16.len()) };
+    Some(p)
+}
+
+// --- Routines this method does not implement: fail closed / not supported. ---
 
 extern "system" fn EapPeerSetCredentials(
     _session_handle: *const c_void,
