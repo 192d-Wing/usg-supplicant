@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/teap", "crates/usg-kat", "crates/fips-tls", "crates/creds", "crates/pac"]
+members = ["crates/teap", "crates/usg-kat", "crates/fips-tls", "crates/creds", "crates/pac", "crates/eaphost"]
 
 [workspace.package]
 edition = "2024"

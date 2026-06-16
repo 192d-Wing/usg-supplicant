@@ -15,7 +15,9 @@
 #![forbid(unsafe_code)]
 
 pub mod cryptobind;
+pub mod eap;
 pub mod error;
 pub mod keyschedule;
+pub mod outer;
 pub mod session;
 pub mod tlv;
