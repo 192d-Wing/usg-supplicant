@@ -75,7 +75,12 @@ fn real_eaphost_enumerates_registered_method() {
             0,
             "EapHostPeerGetMethods"
         );
-        let methods = core::slice::from_raw_parts(arr.pEapMethods, arr.dwNumberOfMethods as usize);
+        // `from_raw_parts` requires a non-null pointer even for len 0.
+        let methods: &[_] = if arr.pEapMethods.is_null() {
+            &[]
+        } else {
+            core::slice::from_raw_parts(arr.pEapMethods, arr.dwNumberOfMethods as usize)
+        };
         let found = methods.iter().any(|m| {
             m.eaptype.eapType.r#type == USG_TYPE_ID as u8 && m.eaptype.dwAuthorId == USG_AUTHOR_ID
         });
@@ -118,9 +123,11 @@ fn real_eaphost_loads_and_begins_session() {
     }
     .to_bytes();
 
-    // SAFETY: EapHostPeer host-API calls per the EAPHost contract.
-    let session_id = unsafe {
-        assert_eq!(EapHostPeerInitialize(), 0, "EapHostPeerInitialize");
+    // SAFETY: EapHostPeer host-API calls per the EAPHost contract. Capture the
+    // outcomes and clean up (EndSession + unregister) BEFORE asserting, so a
+    // failure never leaves the method registered in HKLM.
+    let (init_rc, begin_rc, session_id) = unsafe {
+        let init_rc = EapHostPeerInitialize();
         let eap_type = EAP_METHOD_TYPE {
             eapType: EAP_TYPE {
                 r#type: USG_TYPE_ID as u8,
@@ -132,7 +139,7 @@ fn real_eaphost_loads_and_begins_session() {
         let cid = GUID::zeroed();
         let mut session_id = 0u32;
         let mut err: *mut EAP_ERROR = core::ptr::null_mut();
-        let rc = EapHostPeerBeginSession(
+        let begin_rc = EapHostPeerBeginSession(
             0,
             eap_type,
             core::ptr::null(),
@@ -148,15 +155,18 @@ fn real_eaphost_loads_and_begins_session() {
             &raw mut session_id,
             &raw mut err,
         );
-        assert_eq!(
-            rc, 0,
-            "EapHostPeerBeginSession: real EAPHost loads our DLL, runs the FIPS gate + BeginSession"
-        );
-        let _ = EapHostPeerEndSession(session_id, &raw mut err);
-        session_id
+        if begin_rc == 0 {
+            let _ = EapHostPeerEndSession(session_id, &raw mut err);
+        }
+        (init_rc, begin_rc, session_id)
     };
 
     let _ = unregister();
+    assert_eq!(init_rc, 0, "EapHostPeerInitialize");
+    assert_eq!(
+        begin_rc, 0,
+        "EapHostPeerBeginSession: real EAPHost loads our DLL, runs the FIPS gate + BeginSession"
+    );
     assert_ne!(session_id, 0, "real EAPHost returned a live session handle");
     eprintln!(
         "real Windows EAPHost loaded our DLL and drove EapPeerInitialize(FIPS) + EapPeerBeginSession (CNG machine cert) — real-host load/begin validated"

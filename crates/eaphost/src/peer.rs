@@ -133,7 +133,8 @@ pub unsafe extern "system" fn EapPeerGetInfo(
 /// `EAPHost` fails routine calls with `ERROR_PROC_NOT_FOUND`.
 ///
 /// # Safety
-/// `p_eap_error`, if non-null, must be an `EAP_ERROR` this method allocated.
+/// FFI export called by `EAPHost`. The argument is ignored: this method never
+/// allocates an `EAP_ERROR` (so `EAPHost` never has one of ours to free here).
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn EapPeerFreeErrorMemory(_p_eap_error: *mut EAP_ERROR) {}
 
