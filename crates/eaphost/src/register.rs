@@ -49,7 +49,11 @@ fn u16_bytes(w: &[u16]) -> &[u8] {
 }
 
 /// Register the peer method under `root` at `base` (`base` is the methods key).
-/// Writes `PeerDllPath`, `PeerFriendlyName`, and `Properties`.
+/// Writes `PeerDllPath` (the auth/method DLL), `PeerIdentityPath` (the DLL whose
+/// by-name `EapPeerGetIdentity` `EAPHost` calls to build the EAP-Response/Identity
+/// — the same DLL), `PeerFriendlyName`, the username/password-dialog opt-outs, and
+/// `Properties`. Without `PeerIdentityPath`, `EAPHost` aborts a session with
+/// `EAP_E_EAPHOST_IDENTITY_UNKNOWN` before any method packet.
 ///
 /// # Errors
 /// [`EapHostError::Win32`] if any registry call fails (e.g. access denied when
@@ -77,7 +81,14 @@ pub fn register_under(root: HKEY, base: &str, dll_path: &str) -> Result<(), EapH
 
     let result = (|| {
         set_sz(hkey, "PeerDllPath", dll_path)?;
+        // EAPHost loads PeerIdentityPath and calls its by-name EapPeerGetIdentity
+        // to produce the EAP-Response/Identity. Our DLL serves both roles.
+        set_sz(hkey, "PeerIdentityPath", dll_path)?;
         set_sz(hkey, "PeerFriendlyName", FRIENDLY_NAME)?;
+        // Certificate method: never prompt for a username/password (mirrors the
+        // in-box TEAP). EAPHost then sources the identity from EapPeerGetIdentity.
+        set_dword(hkey, "PeerInvokeUsernameDialog", 0)?;
+        set_dword(hkey, "PeerInvokePasswordDialog", 0)?;
         set_dword(hkey, "Properties", 0)?;
         Ok(())
     })();

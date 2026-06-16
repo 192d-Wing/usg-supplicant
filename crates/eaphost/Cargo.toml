@@ -38,6 +38,8 @@ windows = { version = "0.62", features = [
     "Win32_Security_Cryptography",
     # LoadLibrary/GetProcAddress for the self-hosted DLL-loading test.
     "Win32_System_LibraryLoader",
+    # LocalAlloc for EapPeerGetIdentity's identity string (EAPHost LocalFrees it).
+    "Win32_System_Memory",
 ] }
 
 # Mirrors the security baseline; `unsafe` is permitted (Win32 FFI) but confined
