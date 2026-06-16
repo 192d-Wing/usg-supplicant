@@ -54,3 +54,14 @@ impl From<rustls::Error> for FipsTlsError {
         Self::Rustls(e)
     }
 }
+
+impl From<usg_fips_tls::error::FipsError> for FipsTlsError {
+    fn from(e: usg_fips_tls::error::FipsError) -> Self {
+        use usg_fips_tls::error::FipsError;
+        match e {
+            FipsError::NotFips => Self::NotFips,
+            FipsError::DisallowedParameter { what } => Self::DisallowedParameter { what },
+            FipsError::NoNegotiatedParameters => Self::NoNegotiatedParameters,
+        }
+    }
+}

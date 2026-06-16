@@ -11,9 +11,7 @@ use std::sync::Arc;
 
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName};
 use rustls::version::TLS13;
-use rustls::{
-    CipherSuite, ClientConfig, ClientConnection, NamedGroup, ProtocolVersion, RootCertStore,
-};
+use rustls::{CipherSuite, ClientConfig, ClientConnection, NamedGroup, RootCertStore};
 
 use teap::keyschedule::{EXPORTER_LABEL_SESSION_KEY_SEED, S_IMCK_LEN};
 use zeroize::Zeroizing;
@@ -246,7 +244,6 @@ impl TeapTlsClient {
             .ok_or(FipsTlsError::NoNegotiatedParameters)?
         {
             CipherSuite::TLS13_AES_256_GCM_SHA384 => Ok(AwsLcMac::sha384()),
-            CipherSuite::TLS13_AES_128_GCM_SHA256 => Ok(AwsLcMac::sha256()),
             _ => Err(FipsTlsError::DisallowedParameter {
                 what: "cipher suite",
             }),
@@ -260,31 +257,12 @@ impl TeapTlsClient {
     /// [`FipsTlsError::DisallowedParameter`] if version, suite, or kx group is
     /// not allowed; [`FipsTlsError::NoNegotiatedParameters`] if absent.
     pub fn enforce_fips_parameters(&self) -> Result<(), FipsTlsError> {
-        if self.conn.protocol_version() != Some(ProtocolVersion::TLSv1_3) {
-            return Err(FipsTlsError::DisallowedParameter {
-                what: "protocol version",
-            });
-        }
-        match self.negotiated_suite() {
-            Some(CipherSuite::TLS13_AES_256_GCM_SHA384 | CipherSuite::TLS13_AES_128_GCM_SHA256) => {
-            }
-            Some(_) => {
-                return Err(FipsTlsError::DisallowedParameter {
-                    what: "cipher suite",
-                });
-            }
-            None => return Err(FipsTlsError::NoNegotiatedParameters),
-        }
-        match self.negotiated_group() {
-            Some(NamedGroup::MLKEM1024) => {}
-            Some(_) => {
-                return Err(FipsTlsError::DisallowedParameter {
-                    what: "key exchange group",
-                });
-            }
-            None => return Err(FipsTlsError::NoNegotiatedParameters),
-        }
-        Ok(())
+        usg_fips_tls::params::enforce_fips_parameters(
+            self.conn.protocol_version(),
+            self.negotiated_suite(),
+            self.negotiated_group(),
+        )
+        .map_err(Into::into)
     }
 }
 
