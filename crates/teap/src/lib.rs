@@ -14,4 +14,7 @@
 //!   crypto/state-machine layer's job in later milestones.
 #![forbid(unsafe_code)]
 
+pub mod cryptobind;
+pub mod error;
+pub mod keyschedule;
 pub mod tlv;

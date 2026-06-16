@@ -97,19 +97,42 @@ for each completed inner method j = 1..n:
 ```
 (In our two-session model each session has exactly one inner method, so `n = 1` per session; the chain construct is kept for fidelity and future multi-inner sessions.)
 
-### 3.4 Crypto-Binding Compound MAC (RFC 7170 §4.2.13, hash = `H`)
-```
-Compound-MAC = HMAC-H(CMK[j], Crypto-Binding-TLV-with-MAC-field-zeroed)
-```
-Each side computes over its own and verifies the peer's; mismatch ⇒ fail closed.
+**HKDF-Expand definition (PIN):** `HKDF-Expand` here is RFC 5869 §2.3 built on
+`HMAC-H`, used directly **without** the RFC 5869 "`PRK` length ≥ HashLen"
+recommendation — `S-IMCK` is 40 octets and `HMAC` accepts any key length. The
+`info` argument is the literal label octets (ASCII, no NUL terminator)
+optionally followed by `IMSK`, exactly as written in §3.3/§3.5.
+
+### 3.4 Crypto-Binding Compound MAC (single MSK-based path — PIN)
+
+RFC 7170's dual EMSK/MSK compound-MAC chains are the main source of its errata.
+Because **both ends are ours**, `usg-TEAP/1.3` collapses this to one
+deterministic path:
+
+- We maintain a **single** `S-IMCK`/`CMK` chain seeded per §3.1 using the
+  **MSK-based** `IMSK` of §3.2.
+- The Crypto-Binding TLV's **MSK Compound MAC** field is:
+  ```
+  MSK-Compound-MAC = HMAC-H(CMK[j], CB)
+  ```
+  where `CB` is the **entire encoded Crypto-Binding TLV** (4-octet header +
+  value) with **both** MAC fields (EMSK and MSK) set to all-zero octets of
+  their negotiated length (= HashLen of `H`).
+- The **EMSK Compound MAC** field MUST be all zeros and is **not** used. The
+  receiver MUST reject a Crypto-Binding whose EMSK Compound MAC is non-zero.
+- Each side computes the MSK Compound MAC and verifies the peer's with a
+  **constant-time** comparison; mismatch ⇒ fail closed.
 
 ### 3.5 Exported MSK to dot3svc (port keys)
 ```
 MSK  = HKDF-Expand(S-IMCK[n], "Session Key Generating Function", 64)
-EMSK = HKDF-Expand(S-IMCK[n], "Extended Session Key Generating Function", 64)   // if needed
+EMSK = HKDF-Expand(S-IMCK[n], "Extended Session Key Generating Function", 64)
 ```
 
-> **Pin point:** §3.1–3.5 constants/labels are the contract. usg-radius and usg-supplicant MUST ship identical implementations; we'll lock them with shared **known-answer test vectors** generated once and checked into both repos.
+> **Pin point:** §3.1–3.5 constants/labels are the contract. usg-radius and
+> usg-supplicant MUST ship identical implementations; they are locked with
+> shared **known-answer test vectors** (see `crates/kat`), committed to both
+> repos and asserted by an independent HMAC/SHA reference in each.
 
 ---
 
