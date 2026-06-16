@@ -1,0 +1,191 @@
+//! End-to-end inner EAP-TLS: the `EapTlsInner` drives a mutual-auth TLS 1.3 +
+//! ML-KEM-1024 handshake (presenting a client cert via a `RemoteSigner` resolver)
+//! against a rustls server, then derives an IMSK that matches the server's
+//! EAP-TLS exporter — i.e. the real machine/user authentication works.
+#![allow(
+    clippy::indexing_slicing,
+    clippy::unwrap_used,
+    clippy::panic,
+    clippy::expect_used
+)]
+
+use std::io::{Cursor, Write as _};
+use std::sync::Arc;
+
+use aws_lc_rs::rand::SystemRandom;
+use aws_lc_rs::signature::{ECDSA_P256_SHA256_ASN1_SIGNING, EcdsaKeyPair};
+use creds::adapter::RemoteCertResolver;
+use fips_tls::backend::client_config;
+use fips_tls::provider::fips_provider_arc;
+use fips_tls::signer::{RemoteSigner, SignerError};
+use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+use rustls::server::WebPkiClientVerifier;
+use rustls::version::TLS13;
+use rustls::{RootCertStore, ServerConfig, ServerConnection, SignatureScheme};
+use supplicant::inner_tls::EapTlsInner;
+use teap::eap::{EapCode, EapPacket};
+use teap::outer::{Reassembler, TeapOuter};
+use teap::session::{InnerMethod, InnerStep};
+
+const SERVER_NAME: &str = "teap.test.local";
+const EAP_TLS_TYPE: u8 = 13;
+const EAP_TLS_LABEL: &[u8] = b"EXPORTER_EAP_TLS_Key_Material";
+
+struct SoftSigner {
+    chain: Vec<CertificateDer<'static>>,
+    key: EcdsaKeyPair,
+}
+impl core::fmt::Debug for SoftSigner {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("SoftSigner").finish_non_exhaustive()
+    }
+}
+impl RemoteSigner for SoftSigner {
+    fn cert_chain(&self) -> Vec<CertificateDer<'static>> {
+        self.chain.clone()
+    }
+    fn scheme(&self) -> SignatureScheme {
+        SignatureScheme::ECDSA_NISTP256_SHA256
+    }
+    fn sign(&self, message: &[u8]) -> Result<Vec<u8>, SignerError> {
+        self.key
+            .sign(&SystemRandom::new(), message)
+            .map(|s| s.as_ref().to_vec())
+            .map_err(|_| SignerError::SigningFailed)
+    }
+}
+
+struct Identity {
+    cert: CertificateDer<'static>,
+    pkcs8: Vec<u8>,
+}
+fn gen_id(name: &str) -> Identity {
+    let ck = rcgen::generate_simple_self_signed([name.to_string()]).unwrap();
+    Identity {
+        cert: ck.cert.der().clone(),
+        pkcs8: ck.key_pair.serialize_der(),
+    }
+}
+
+fn eap_tls_request(id: u8, outer: &TeapOuter) -> Vec<u8> {
+    EapPacket {
+        code: EapCode::Request,
+        id,
+        type_: Some(EAP_TLS_TYPE),
+        data: outer.build(),
+    }
+    .encode()
+    .unwrap()
+}
+fn outer_of(resp: &[u8]) -> TeapOuter {
+    let pkt = EapPacket::decode(resp).unwrap();
+    assert_eq!(pkt.type_, Some(EAP_TLS_TYPE));
+    TeapOuter::parse(&pkt.data).unwrap()
+}
+
+#[test]
+fn inner_eap_tls_mutual_auth_derives_matching_imsk() {
+    let server_id = gen_id(SERVER_NAME);
+    let client_id = gen_id("usg-machine");
+
+    // Server requires a client cert chaining to `client_id`.
+    let mut client_roots = RootCertStore::empty();
+    client_roots.add(client_id.cert.clone()).unwrap();
+    let verifier =
+        WebPkiClientVerifier::builder_with_provider(Arc::new(client_roots), fips_provider_arc())
+            .build()
+            .unwrap();
+    let server_config = ServerConfig::builder_with_provider(fips_provider_arc())
+        .with_protocol_versions(&[&TLS13])
+        .unwrap()
+        .with_client_cert_verifier(verifier)
+        .with_single_cert(
+            vec![server_id.cert.clone()],
+            PrivateKeyDer::Pkcs8(server_id.pkcs8.clone().into()),
+        )
+        .unwrap();
+    let mut server = ServerConnection::new(Arc::new(server_config)).unwrap();
+
+    // Client presents `client_id` via a RemoteSigner resolver.
+    let signer = SoftSigner {
+        chain: vec![client_id.cert.clone()],
+        key: EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_ASN1_SIGNING, &client_id.pkcs8).unwrap(),
+    };
+    let mut roots = RootCertStore::empty();
+    roots.add(server_id.cert.clone()).unwrap();
+    let config = client_config(
+        roots,
+        RemoteCertResolver::new(Arc::new(signer)).into_client_auth(),
+    )
+    .unwrap();
+    let mut inner = EapTlsInner::new(config, SERVER_NAME, 64 * 1024).unwrap();
+
+    let mut server_reasm = Reassembler::new(256 * 1024);
+    let start = TeapOuter {
+        more_fragments: false,
+        start: true,
+        version: 0,
+        tls_message_length: None,
+        data: vec![],
+    };
+    let mut inbound = eap_tls_request(1, &start);
+    let mut id = 1u8;
+    let mut sent_commitment = false;
+
+    for _ in 0..16 {
+        match inner.process(&inbound) {
+            InnerStep::Respond(resp) => {
+                let outer = outer_of(&resp);
+                if let Some(records) = server_reasm.push(&outer).unwrap()
+                    && !records.is_empty()
+                {
+                    let mut cur = Cursor::new(records);
+                    while server.read_tls(&mut cur).unwrap() > 0 {
+                        server.process_new_packets().unwrap();
+                    }
+                }
+                id = id.wrapping_add(1);
+                let mut server_out = Vec::new();
+                if server.is_handshaking() {
+                    while server.wants_write() {
+                        server.write_tls(&mut server_out).unwrap();
+                    }
+                } else if !sent_commitment {
+                    // Handshake done: the client cert was accepted. Send the
+                    // protected commitment message.
+                    assert!(
+                        server.peer_certificates().is_some(),
+                        "server got client cert"
+                    );
+                    server.writer().write_all(&[0x00]).unwrap();
+                    while server.wants_write() {
+                        server.write_tls(&mut server_out).unwrap();
+                    }
+                    sent_commitment = true;
+                } else {
+                    panic!("unexpected extra inner response");
+                }
+                let next = TeapOuter {
+                    more_fragments: false,
+                    start: false,
+                    version: 0,
+                    tls_message_length: None,
+                    data: server_out,
+                };
+                inbound = eap_tls_request(id, &next);
+            }
+            InnerStep::Done(imsk) => {
+                assert_eq!(imsk.len(), 32);
+                // Server derives the same EAP-TLS key material.
+                let mut server_key = [0u8; 64];
+                server
+                    .export_keying_material(&mut server_key, EAP_TLS_LABEL, None)
+                    .unwrap();
+                assert_eq!(imsk, server_key[..32], "inner IMSK must match the server");
+                return;
+            }
+            InnerStep::Failed => panic!("inner EAP-TLS failed"),
+        }
+    }
+    panic!("inner handshake did not converge");
+}

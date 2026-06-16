@@ -213,6 +213,25 @@ impl TeapTlsClient {
         Ok(Zeroizing::new(seed))
     }
 
+    /// Generic RFC 8446 keying-material export (gated on a finalized tunnel).
+    /// Used by the inner EAP-TLS method to derive its `IMSK` with the EAP-TLS
+    /// exporter label. The output is scrubbed on drop.
+    ///
+    /// # Errors
+    /// [`FipsTlsError::NotEstablished`] before [`TeapTlsClient::finish_handshake`],
+    /// or [`FipsTlsError::Rustls`] if the exporter fails.
+    pub fn export_keying_material(
+        &self,
+        label: &[u8],
+        len: usize,
+    ) -> Result<Zeroizing<Vec<u8>>, FipsTlsError> {
+        self.require_established()?;
+        let out = self
+            .conn
+            .export_keying_material(vec![0u8; len], label, None)?;
+        Ok(Zeroizing::new(out))
+    }
+
     /// Fail-closed gate: secret-producing methods require a finalized tunnel.
     fn require_established(&self) -> Result<(), FipsTlsError> {
         if self.established {
