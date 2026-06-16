@@ -65,7 +65,9 @@ pub struct SessionConfig {
 
 /// One inner EAP-TLS method, abstracted so the state machine is testable without
 /// real TLS. The production impl drives an inner rustls/CNG/smartcard handshake.
-pub trait InnerMethod {
+///
+/// `Send`: the owning session/driver moves across `EAPHost`/`dot3svc` threads.
+pub trait InnerMethod: Send {
     /// Process one inbound inner EAP packet, producing the next step.
     fn process(&mut self, inner_eap: &[u8]) -> InnerStep;
 }
