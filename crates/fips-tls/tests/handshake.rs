@@ -24,6 +24,13 @@ use teap::keyschedule::TeapMac as _;
 
 const SERVER_NAME: &str = "teap.test.local";
 
+// RSA server-cert chain fixtures (see fixtures/gen_rsa_chain.go). DoD RADIUS
+// server certs and their CA chain are RSA; rcgen cannot mint RSA, so these are
+// a committed RSA-2048 CA + leaf (CN/SAN = SERVER_NAME) + the leaf's PKCS#8 key.
+const RSA_CA: &[u8] = include_bytes!("fixtures/rsa_ca.der");
+const RSA_LEAF: &[u8] = include_bytes!("fixtures/rsa_server_leaf.der");
+const RSA_KEY: &[u8] = include_bytes!("fixtures/rsa_server_key_pkcs8.der");
+
 struct TestServerCert {
     cert: CertificateDer<'static>,
     key: PrivateKeyDer<'static>,
@@ -171,6 +178,46 @@ fn server_name_mismatch_is_rejected() {
         converged,
         "expected the handshake to fail on server-name mismatch"
     );
+}
+
+#[test]
+fn handshake_verifies_rsa_server_cert_chain() {
+    // The outer tunnel must verify an RSA leaf (RSA-PSS CertificateVerify) issued
+    // by an RSA CA (PKCS#1 chain signature) — the DoD server-cert case — while
+    // still negotiating ML-KEM-1024 / AES-256-GCM. The server presents only the
+    // leaf; the CA is the client's trust anchor.
+    let leaf = CertificateDer::from(RSA_LEAF.to_vec());
+    let key = PrivateKeyDer::Pkcs8(RSA_KEY.to_vec().into());
+    let server_config = ServerConfig::builder_with_provider(fips_provider_arc())
+        .with_protocol_versions(&[&TLS13])
+        .unwrap()
+        .with_no_client_auth()
+        .with_single_cert(vec![leaf], key)
+        .unwrap();
+    let mut srv = ServerConnection::new(Arc::new(server_config)).unwrap();
+
+    let mut roots = RootCertStore::empty();
+    roots.add(CertificateDer::from(RSA_CA.to_vec())).unwrap();
+    let config = client_config(roots, ClientAuth::None).unwrap();
+    let mut cli = TeapTlsClient::connect(config, SERVER_NAME).unwrap();
+
+    drive(&mut cli, &mut srv);
+
+    assert_eq!(cli.negotiated_group(), Some(NamedGroup::MLKEM1024));
+    assert_eq!(
+        cli.negotiated_suite(),
+        Some(CipherSuite::TLS13_AES_256_GCM_SHA384)
+    );
+    cli.finish_handshake()
+        .expect("RSA server chain verifies and params are FIPS-allowed");
+
+    // Both ends agreeing on the exporter seed proves the tunnel fully established
+    // over the RSA-authenticated handshake.
+    let client_seed = cli.session_key_seed().unwrap();
+    let server_seed = srv
+        .export_keying_material([0u8; 40], b"EXPORTER: teap session key seed", None)
+        .unwrap();
+    assert_eq!(*client_seed, server_seed);
 }
 
 #[test]
