@@ -69,6 +69,28 @@ Use a **vendor TEAP TLV** (private, since both ends are ours):
 - **TLVs server must support:** Authority-ID, Identity-Type, EAP-Payload, Intermediate-Result, **Crypto-Binding** (mandatory each inner method), Result, **MAT (vendor)**, Error, NAK, Request-Action.
 - **Crypto-Binding:** server MUST send and verify a Crypto-Binding TLV per inner method (§3.4) and only emit `Result=Success` when it verifies.
 
+### 2.1 Inner EAP-TLS client-certificate signature algorithms — **NEW** (usg-radius to implement)
+
+> **NEW / for the usg-radius agent.** Added because the supplicant now signs the inner EAP-TLS `CertificateVerify` with the **machine/user certificate's own key**, which on real DoD PKI is **RSA-2048** (CAC/PIV), not only ECDSA. The server's inner EAP-TLS `CertificateRequest` and its CertificateVerify-verification must accept what the supplicant sends. Validated on hardware against live CAC/machine certs.
+
+**Client key types the supplicant presents** (machine cert via CNG, user cert via smartcard): **ECDSA P-256**, **ECDSA P-384**, or **RSA ≥ 2048** (DESIGN.md allow-list; RSA < 2048 is rejected by the supplicant and MUST be rejected by usg-radius).
+
+**TLS 1.3 signature scheme per key (what the supplicant puts in CertificateVerify):**
+
+| Client key | `signature_algorithms` codepoint | rustls / scheme name |
+| --- | --- | --- |
+| ECDSA P-256 | `0x0403` `ecdsa_secp256r1_sha256` | `ECDSA_NISTP256_SHA256` |
+| ECDSA P-384 | `0x0503` `ecdsa_secp384r1_sha384` | `ECDSA_NISTP384_SHA384` |
+| RSA (rsaEncryption) | `0x0804` `rsa_pss_rsae_sha256` | `RSA_PSS_SHA256` |
+
+usg-radius MUST:
+
+1. In the **inner EAP-TLS `CertificateRequest`**, offer **all three** schemes above in `signature_algorithms`. The supplicant advertises **exactly one** scheme (the one its selected key uses) and **declines to present** a cert if the server's offered set does not contain it — so a missing scheme silently drops to no-client-cert / auth failure rather than a clear error.
+2. **Verify** the client `CertificateVerify` with a provider whose `signature_verification_algorithms` includes these. The shared `usg-fips-tls` provider already does (it keeps the aws-lc-rs default signature algorithms; only suites + KX are restricted) — no provider change needed on the server, just don't strip the defaults.
+3. Reject client RSA keys `< 2048` bits, matching the supplicant.
+
+**FIPS note (intentional):** RSA uses **SHA-256** PSS (`rsa_pss_rsae_sha256`, salt = 32) even on the SHA-384/AES-256 suite — the most widely supported `rsae` scheme, and FIPS-valid for RSA-2048. This is the one place the client-cert signature hash diverges from the tunnel's SHA-384 posture. See §5 to pin SHA-256 vs SHA-384 for RSA before this is load-bearing; whichever is chosen, **both ends must advertise/accept the same** scheme.
+
 ---
 
 ## 3. `usg-TEAP/1.3` key schedule (NORMATIVE — implement identically both ends)
@@ -151,6 +173,7 @@ EMSK = HKDF-Expand(S-IMCK[n], "Extended Session Key Generating Function", 64)
 ## 4. What usg-radius needs to add (checklist)
 
 - [ ] TEAP outer over TLS 1.3 only, suite allow-list, EAP-TLS inner only.
+- [ ] **(NEW, §2.1)** Inner EAP-TLS `CertificateRequest` offers ECDSA P-256/P-384 **and** `rsa_pss_rsae_sha256`; verify client `CertificateVerify` for all three; reject RSA < 2048.
 - [ ] Per-session Crypto-Binding using the §3 `usg-TEAP/1.3` schedule.
 - [ ] Vendor **MAT TLV** issue (machine session) + validate/consume (user session).
 - [ ] AES-256-GCM MAT seal/unseal with rotating master key (`key_id`).
@@ -166,4 +189,4 @@ EMSK = HKDF-Expand(S-IMCK[n], "Extended Session Key Generating Function", 64)
 - **Single-use:** track `nonce_id` server-side for strict replay protection, or rely on short lifetime + NAS binding?
 - **NAS binding (1.3 step 4):** can we assume machine and user sessions share Calling-Station-ID / NAS-Port? If yes, enforce it.
 - **Master-key custody:** where does the MAT master key live in usg-radius (HSM/KMS)? Must be FIPS-validated storage.
-```
+- **(NEW, §2.1) RSA client-cert PSS hash:** supplicant currently advertises `rsa_pss_rsae_sha256` (SHA-256) for all RSA keys, even on the SHA-384/AES-256 suite. Keep SHA-256 (most interoperable, FIPS-valid for RSA-2048), or switch both ends to `rsa_pss_rsae_sha384` (`0x0805`) for a uniform SHA-384 posture? Pick one; both ends MUST match.
