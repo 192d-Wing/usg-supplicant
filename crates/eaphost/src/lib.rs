@@ -34,6 +34,7 @@
 //! `unsafe` is confined to the Windows FFI; every other target forbids it.
 #![cfg_attr(not(windows), forbid(unsafe_code))]
 
+pub mod builder;
 pub mod error;
 pub mod os_fips;
 pub mod session;
