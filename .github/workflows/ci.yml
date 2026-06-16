@@ -87,6 +87,9 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: stable
+          # Go is only a build tool for aws-lc-fips-sys; there is no Go module,
+          # so disable module caching (avoids a spurious "go.sum not found" error).
+          cache: false
 
       - name: Install NASM (Linux)
         if: runner.os == 'Linux'
