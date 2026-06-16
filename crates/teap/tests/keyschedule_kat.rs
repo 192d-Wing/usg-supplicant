@@ -13,12 +13,12 @@
 )]
 
 use hmac::{Hmac, Mac};
-use kat::{from_hex, keyschedule_vectors as kv};
 use sha2::{Sha256, Sha384};
 use teap::cryptobind::{seal, verify};
 use teap::error::{CryptoBindError, KeyScheduleError};
 use teap::keyschedule::{KeySchedule, TeapMac};
 use teap::tlv::CryptoBindingTlv;
+use usg_kat::{from_hex, keyschedule_vectors as kv};
 
 /// Reference HMAC-SHA-384 (48-octet output).
 struct RefSha384;

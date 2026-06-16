@@ -143,7 +143,7 @@ EMSK = HKDF-Expand(S-IMCK[n], "Extended Session Key Generating Function", 64)
 
 > **Pin point:** §3.1–3.5 constants/labels are the contract. usg-radius and
 > usg-supplicant MUST ship identical implementations; they are locked with
-> shared **known-answer test vectors** (see `crates/kat`), committed to both
+> shared **known-answer test vectors** (see `crates/usg-kat`), committed to both
 > repos and asserted by an independent HMAC/SHA reference in each.
 
 ---

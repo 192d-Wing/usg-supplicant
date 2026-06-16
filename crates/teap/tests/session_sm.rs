@@ -14,7 +14,6 @@
 use std::collections::VecDeque;
 
 use hmac::{Hmac, Mac};
-use kat::{from_hex, keyschedule_vectors as kv};
 use sha2::Sha384;
 use teap::cryptobind::{CB_SUBTYPE_REQUEST, CB_SUBTYPE_RESPONSE, seal, verify};
 use teap::keyschedule::{Cmk, KeySchedule, TeapMac};
@@ -26,6 +25,7 @@ use teap::tlv::{
     CryptoBindingTlv, EapPayloadTlv, IdentityType, IntermediateResultTlv, RawTlv, ResultStatus,
     ResultTlv, VendorSpecificTlv, type_id,
 };
+use usg_kat::{from_hex, keyschedule_vectors as kv};
 
 const VENDOR_ID: u32 = 0x0000_9999;
 

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/teap", "crates/kat", "crates/fips-tls", "crates/creds", "crates/pac"]
+members = ["crates/teap", "crates/usg-kat", "crates/fips-tls", "crates/creds", "crates/pac"]
 
 [workspace.package]
 edition = "2024"
@@ -10,7 +10,7 @@ authors = ["USG"]
 repository = "usg-supplicant"
 
 # Security baseline applied to every workspace crate that opts in with
-# `[lints] workspace = true`. Pure crates (teap, kat) additionally
+# `[lints] workspace = true`. Pure crates (teap, usg-kat) additionally
 # `#![forbid(unsafe_code)]` in their crate root.
 [workspace.lints.rust]
 unsafe_code = "forbid"

@@ -12,7 +12,7 @@ description = "EAP-TEAP (RFC 7170) protocol core: TLV codec, per-session state m
 zeroize = { version = "1.9.0", default-features = false, features = ["alloc", "zeroize_derive"] }
 
 [dev-dependencies]
-kat = { path = "../kat" }
+usg-kat = { path = "../usg-kat" }
 # TEST-ONLY independent reference for HMAC-SHA-256/384, used to compute and
 # verify the usg-TEAP/1.3 key-schedule KAT vectors. NOT a production/FIPS-path
 # dependency — the shipped binary's MAC comes from the FIPS-validated module.

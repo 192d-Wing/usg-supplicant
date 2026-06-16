@@ -9,11 +9,11 @@
     clippy::missing_panics_doc
 )]
 
-use kat::tlv_vectors as v;
 use teap::tlv::{
     CryptoBindingTlv, ErrorTlv, IdentityType, IntermediateResultTlv, NakTlv, RawTlv, ResultStatus,
     ResultTlv, TlvError, TlvReader, VendorSpecificTlv, encode_all,
 };
+use usg_kat::tlv_vectors as v;
 
 // ---- Known-answer vectors (shared with usg-radius) ----
 

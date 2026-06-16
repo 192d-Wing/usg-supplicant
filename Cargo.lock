@@ -366,10 +366,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "kat"
-version = "0.1.0"
-
-[[package]]
 name = "lazy_static"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -708,8 +704,8 @@ name = "teap"
 version = "0.1.0"
 dependencies = [
  "hmac",
- "kat",
  "sha2",
+ "usg-kat",
  "zeroize",
 ]
 
@@ -796,6 +792,10 @@ dependencies = [
  "aws-lc-rs",
  "rustls",
 ]
+
+[[package]]
+name = "usg-kat"
+version = "0.1.0"
 
 [[package]]
 name = "version_check"
