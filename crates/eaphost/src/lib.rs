@@ -8,11 +8,16 @@
 //! This crate currently provides the parts that are verifiable off-device:
 //! - [`os_fips`] — the OS-level `FipsAlgorithmPolicy` gate (DESIGN §3), which
 //!   together with `fips_tls`'s provider self-check completes the FIPS boundary.
+//! - [`session`] — [`session::PeerSession`], the platform-independent adapter
+//!   that maps `EAPHost`'s split call sequence (process / get-response /
+//!   get-result) onto the [`supplicant::driver::TeapDriver`], with response
+//!   buffering, MSK capture, and fail-closed behavior. The FFI exports marshal
+//!   into this.
 //!
 //! ## Remaining work (requires the Windows `EAPHost` SDK + an on-device test host)
 //!
 //! **Peer-method DLL exports** (C ABI, `extern "system"`, `#[no_mangle]`): the
-//! shim marshals each `EAPHost` call into the orchestration core —
+//! shim marshals each `EAPHost` call into [`session::PeerSession`] —
 //! `EapPeerGetInfo`, `EapPeerInitialize`, `EapPeerBeginSession`,
 //! `EapPeerProcessRequestPacket`, `EapPeerGetResponsePacket`, `EapPeerGetResult`,
 //! `EapPeerGetIdentity`, `EapPeerGet/SetUIContext`,
@@ -31,6 +36,7 @@
 
 pub mod error;
 pub mod os_fips;
+pub mod session;
 
 /// Registry location under which an `EAPHost` peer method is registered.
 pub const EAPHOST_METHODS_KEY: &str = r"SYSTEM\CurrentControlSet\Services\EapHost\Methods";
