@@ -433,8 +433,11 @@ pub unsafe extern "system" fn EapPeerGetIdentity(
     if ppwsz_identity.is_null() {
         return E_FAIL;
     }
-    // No UI prompt, and no user-data blob to carry into BeginSession.
+    // Initialize every out-param up front (no UI prompt, no user-data blob to
+    // carry into BeginSession, and a defined identity pointer) so the fallible
+    // allocation below never leaves one indeterminate on the error path.
     unsafe {
+        *ppwsz_identity = windows::core::PWSTR::null();
         if !pf_invoke_ui.is_null() {
             *pf_invoke_ui = false.into();
         }
