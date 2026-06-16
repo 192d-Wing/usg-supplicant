@@ -39,6 +39,9 @@
 pub mod builder;
 pub mod error;
 pub mod os_fips;
+/// The `EAPHost` peer-method C-ABI exports (the DLL `dot3svc` loads).
+#[cfg(windows)]
+pub mod peer;
 pub mod session;
 pub mod session_registry;
 

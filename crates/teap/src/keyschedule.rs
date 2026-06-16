@@ -39,7 +39,10 @@ pub const LABEL_EMSK: &[u8] = b"Extended Session Key Generating Function";
 /// The single cryptographic primitive the key schedule needs: `HMAC-H` over the
 /// negotiated cipher suite's hash. Implementations MUST be FIPS-validated on the
 /// production path; tests inject an independent reference.
-pub trait TeapMac {
+///
+/// `Send`: a session (and the driver owning it) moves across `EAPHost`/`dot3svc`
+/// threads, so the boxed MAC must be sendable.
+pub trait TeapMac: Send {
     /// Output length of `H` in octets (32 for SHA-256, 48 for SHA-384).
     fn hash_len(&self) -> usize;
     /// `HMAC-H(key, data)`. `key` may be any length.

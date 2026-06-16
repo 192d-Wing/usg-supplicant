@@ -5,7 +5,12 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
-description = "Windows EAPHost integration for the TEAP supplicant: OS FIPS-policy gate, EAP method registration, and (later) the peer-method DLL shim driven by dot3svc."
+description = "Windows EAPHost integration for the TEAP supplicant: OS FIPS-policy gate, EAP method registration, and the peer-method DLL shim driven by dot3svc."
+
+# `cdylib` produces eaphost.dll (the EAPHost peer method); `lib` keeps the crate
+# usable as a normal dependency and unit-testable.
+[lib]
+crate-type = ["lib", "cdylib"]
 
 [dependencies]
 # Platform-independent TEAP orchestration the peer-method shim drives.
@@ -23,6 +28,12 @@ zeroize = { version = "1.9", default-features = false, features = ["alloc"] }
 windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_System_Registry",
+    # EAPHost peer-method ABI: EAP_PEER_METHOD_ROUTINES, EapPacket,
+    # EapPeerMethodOutput/Result, EAP_ERROR, EAP_ATTRIBUTES.
+    "Win32_Security_ExtensibleAuthenticationProtocol",
+    "Win32_Security_Cryptography",
+    # LoadLibrary/GetProcAddress for the self-hosted DLL-loading test.
+    "Win32_System_LibraryLoader",
 ] }
 
 # Mirrors the security baseline; `unsafe` is permitted (Win32 FFI) but confined
