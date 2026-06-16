@@ -22,7 +22,7 @@ jobs:
   # Dev (non-FIPS) build + test across Linux and Windows. The Windows leg is what
   # actually compiles the #[cfg(windows)] FFI in creds::cng / pac::dpapi.
   test:
-    name: build & test (${{ matrix.os }})
+    name: dev build & test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -57,3 +57,47 @@ jobs:
 
       - name: Test
         run: cargo test --workspace
+
+  # FIPS build + test: routes ALL crypto through the validated aws-lc-fips
+  # module. This is the configuration release builds REQUIRE (fips-tls has a
+  # compile_error! that fails a non-test release build without `fips`), so it is
+  # the artifact that actually ships. aws-lc-fips-sys needs Go in addition to the
+  # NASM/CMake/C toolchain used by the dev provider.
+  fips:
+    name: fips build & test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust 1.95.0
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.95.0
+
+      # Separate cache key: the fips build artifacts differ from the dev build's.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: fips
+
+      - name: Install Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: stable
+
+      - name: Install NASM (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y nasm
+
+      - name: Install NASM (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/setup-nasm@v1
+
+      - name: Build (fips)
+        run: cargo build -p fips-tls --features fips
+
+      - name: Test (fips)
+        run: cargo test -p fips-tls --features fips
