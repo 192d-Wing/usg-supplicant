@@ -11,6 +11,7 @@
 //! only on Windows; it is type-checked from other hosts via
 //! `cargo check --target x86_64-pc-windows-msvc`.
 
+use core::ffi::c_void;
 use std::sync::Mutex;
 
 use aws_lc_rs::digest;
@@ -20,15 +21,16 @@ use rustls::pki_types::CertificateDer;
 
 use windows::Win32::Security::Cryptography::{
     CERT_CONTEXT, CERT_OPEN_STORE_FLAGS, CERT_QUERY_ENCODING_TYPE, CERT_STORE_PROV_SYSTEM_W,
-    CERT_SYSTEM_STORE_CURRENT_USER_ID, CERT_SYSTEM_STORE_LOCAL_MACHINE_ID,
-    CERT_SYSTEM_STORE_LOCATION_SHIFT, CRYPT_ACQUIRE_ONLY_NCRYPT_KEY_FLAG,
-    CRYPT_ACQUIRE_SILENT_FLAG, CertCloseStore, CertDuplicateCertificateContext,
-    CertEnumCertificatesInStore, CertFreeCertificateContext, CertOpenStore,
-    CryptAcquireCertificatePrivateKey, HCERTSTORE, NCRYPT_FLAGS, NCRYPT_KEY_HANDLE,
+    CERT_STORE_READONLY_FLAG, CERT_SYSTEM_STORE_CURRENT_USER_ID,
+    CERT_SYSTEM_STORE_LOCAL_MACHINE_ID, CERT_SYSTEM_STORE_LOCATION_SHIFT,
+    CRYPT_ACQUIRE_ONLY_NCRYPT_KEY_FLAG, CRYPT_ACQUIRE_SILENT_FLAG, CertCloseStore,
+    CertDuplicateCertificateContext, CertEnumCertificatesInStore, CertFreeCertificateContext,
+    CertOpenStore, CryptAcquireCertificatePrivateKey, HCERTSTORE, NCRYPT_FLAGS, NCRYPT_KEY_HANDLE,
     NCRYPT_SILENT_FLAG, NCryptSignHash, X509_ASN_ENCODING,
 };
 
 use crate::error::CredError;
+use crate::keyinfo::CertKey;
 use crate::selection::CertSelector;
 use crate::{CredKind, ecdsa};
 
@@ -46,7 +48,10 @@ impl StoreLocation {
             Self::CurrentUser => CERT_SYSTEM_STORE_CURRENT_USER_ID,
         };
         // The system-store location is encoded in the high bits of the flags.
-        CERT_OPEN_STORE_FLAGS(id << CERT_SYSTEM_STORE_LOCATION_SHIFT)
+        // CERT_STORE_READONLY_FLAG is required: we never modify the store, and
+        // without it CertOpenStore requests read/write, which a non-elevated
+        // caller cannot get on `Local Machine\My` (fails E_ACCESSDENIED).
+        CERT_OPEN_STORE_FLAGS((id << CERT_SYSTEM_STORE_LOCATION_SHIFT) | CERT_STORE_READONLY_FLAG.0)
     }
 }
 
@@ -64,8 +69,8 @@ fn wide(s: &str) -> Vec<u16> {
 pub struct CngSigner {
     kind: CredKind,
     cert_der: Vec<u8>,
-    scheme: SignatureScheme,
-    coord_len: usize,
+    /// The key's signature shape (ECDSA curve / RSA-PSS) and TLS scheme.
+    sig: CertKey,
     // NCRYPT_KEY_HANDLE is not Sync; serialize signing through a mutex.
     key: Mutex<NCRYPT_KEY_HANDLE>,
     /// Whether we (the caller) must free `key`. If false, the handle is owned by
@@ -171,13 +176,12 @@ fn open_and_select(
 
     // From here, free `cert_ctx` on any error path before returning.
     let build = || -> Result<CngSigner, CredError> {
-        let (scheme, coord_len) = crate::keyinfo::ecdsa_scheme_for_cert(&cert_der)?;
+        let sig = crate::keyinfo::scheme_for_cert(&cert_der)?;
         let (key, caller_free_key) = acquire_key(cert_ctx)?;
         Ok(CngSigner {
             kind,
             cert_der: cert_der.clone(),
-            scheme,
-            coord_len,
+            sig,
             key: Mutex::new(key),
             caller_free_key,
             cert_ctx,
@@ -220,7 +224,7 @@ impl RemoteSigner for CngSigner {
         vec![CertificateDer::from(self.cert_der.clone())]
     }
     fn scheme(&self) -> SignatureScheme {
-        self.scheme
+        self.sig.scheme()
     }
     fn sign(&self, message: &[u8]) -> Result<Vec<u8>, SignerError> {
         self.sign_inner(message)
@@ -235,40 +239,74 @@ impl CngSigner {
         self.kind
     }
 
-    /// Hash in the validated module, then sign the digest in CNG. For ECDSA,
-    /// `NCryptSignHash` signs the raw digest and returns `r||s`, which we DER-encode.
+    /// Hash in the validated module, then sign the digest in CNG.
+    ///
+    /// - **ECDSA**: `NCryptSignHash` signs the raw digest and returns `r||s`,
+    ///   which we re-encode as ASN.1 DER for TLS.
+    /// - **RSA**: `NCryptSignHash` signs with PSS padding (salt length == digest
+    ///   length, RFC 8446) and returns the final signature octets directly.
     fn sign_inner(&self, message: &[u8]) -> Result<Vec<u8>, CredError> {
-        let digest = match self.scheme {
-            SignatureScheme::ECDSA_NISTP256_SHA256 => {
-                digest::digest(&digest::SHA256, message).as_ref().to_vec()
+        let digest = digest::digest(scheme_digest(self.sig.scheme())?, message)
+            .as_ref()
+            .to_vec();
+        match self.sig {
+            CertKey::Ecdsa { coord_len, .. } => {
+                let raw = self.ncrypt_sign(&digest, None, NCRYPT_FLAGS(0))?;
+                ecdsa::raw_to_der(&raw, coord_len)
             }
-            SignatureScheme::ECDSA_NISTP384_SHA384 => {
-                digest::digest(&digest::SHA384, message).as_ref().to_vec()
-            }
-            _ => return Err(CredError::UnsupportedKey),
-        };
-        let raw = self.ncrypt_sign(&digest)?;
-        ecdsa::raw_to_der(&raw, self.coord_len)
+            CertKey::RsaPss { digest_len, .. } => self.ncrypt_sign_pss(&digest, digest_len),
+        }
     }
 
-    /// Call `NCryptSignHash` (size query, then sign) returning the raw `r||s`.
-    fn ncrypt_sign(&self, digest: &[u8]) -> Result<Vec<u8>, CredError> {
+    /// `NCryptSignHash` with RSA-PSS padding. `salt_len` is the PSS salt length,
+    /// which TLS 1.3 fixes to the digest length; MGF1 uses the same hash.
+    fn ncrypt_sign_pss(&self, digest: &[u8], salt_len: usize) -> Result<Vec<u8>, CredError> {
+        use windows::Win32::Security::Cryptography::{
+            BCRYPT_PSS_PADDING_INFO, BCRYPT_SHA256_ALGORITHM, BCRYPT_SHA384_ALGORITHM,
+            NCRYPT_PAD_PSS_FLAG,
+        };
+        let cb_salt = u32::try_from(salt_len).map_err(|_| CredError::BadSignature)?;
+        let alg_id = match salt_len {
+            32 => BCRYPT_SHA256_ALGORITHM,
+            48 => BCRYPT_SHA384_ALGORITHM,
+            _ => return Err(CredError::UnsupportedKey),
+        };
+        let pad = BCRYPT_PSS_PADDING_INFO {
+            pszAlgId: alg_id,
+            cbSalt: cb_salt,
+        };
+        // `pad` (and the static string `pszAlgId` points at) outlives the calls
+        // inside `ncrypt_sign`, which runs to completion before this returns.
+        let padding: Option<*const c_void> = Some((&raw const pad).cast());
+        self.ncrypt_sign(digest, padding, NCRYPT_FLAGS(NCRYPT_PAD_PSS_FLAG.0))
+    }
+
+    /// Call `NCryptSignHash` (size query, then sign) returning the signature
+    /// octets. `padding`/`pad_flags` are `None`/`0` for ECDSA, or the PSS padding
+    /// info and `NCRYPT_PAD_PSS_FLAG` for RSA. `padding`, if `Some`, must point at
+    /// a value live for the duration of this call.
+    fn ncrypt_sign(
+        &self,
+        digest: &[u8],
+        padding: Option<*const c_void>,
+        pad_flags: NCRYPT_FLAGS,
+    ) -> Result<Vec<u8>, CredError> {
         let handle = *self.key.lock().map_err(|_| CredError::NoSigningKey)?;
-        let flags = NCRYPT_FLAGS(NCRYPT_SILENT_FLAG.0);
+        let flags = NCRYPT_FLAGS(NCRYPT_SILENT_FLAG.0 | pad_flags.0);
         let mut needed: u32 = 0;
-        // SAFETY: handle is a live NCRYPT key; first call (None signature)
-        // returns the required buffer size in `needed`.
+        // SAFETY: handle is a live NCRYPT key; `padding` (if Some) is live for the
+        // call; first call (None signature) returns the required size in `needed`.
         unsafe {
-            NCryptSignHash(handle, None, digest, None, &raw mut needed, flags)
+            NCryptSignHash(handle, padding, digest, None, &raw mut needed, flags)
                 .map_err(|e| CredError::StoreFailure { detail: e.code().0 })?;
         }
         let mut sig = vec![0u8; needed as usize];
         let mut written: u32 = 0;
-        // SAFETY: `sig` is sized to `needed`; ECDSA has no padding info.
+        // SAFETY: `sig` is sized to `needed`; `padding` is the same live value.
         unsafe {
             NCryptSignHash(
                 handle,
-                None,
+                padding,
                 digest,
                 Some(&mut sig),
                 &raw mut written,
@@ -279,6 +317,15 @@ impl CngSigner {
         sig.truncate(written as usize);
         Ok(sig)
     }
+}
+
+/// The hash algorithm a TLS 1.3 signature scheme digests with.
+fn scheme_digest(scheme: SignatureScheme) -> Result<&'static digest::Algorithm, CredError> {
+    Ok(match scheme {
+        SignatureScheme::ECDSA_NISTP256_SHA256 | SignatureScheme::RSA_PSS_SHA256 => &digest::SHA256,
+        SignatureScheme::ECDSA_NISTP384_SHA384 => &digest::SHA384,
+        _ => return Err(CredError::UnsupportedKey),
+    })
 }
 
 /// RAII wrapper over an open `HCERTSTORE`.

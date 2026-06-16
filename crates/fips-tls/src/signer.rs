@@ -44,9 +44,10 @@ pub trait RemoteSigner: Send + Sync + core::fmt::Debug {
     fn scheme(&self) -> SignatureScheme;
 
     /// Sign `message` (the rustls to-be-signed bytes) inside the key store and
-    /// return the signature in the encoding TLS expects (DER for ECDSA, PKCS#1
-    /// v1.5 for RSA). Implementations hash `message` with the scheme's digest
-    /// before invoking the store's hash-signing primitive.
+    /// return the signature in the encoding TLS expects (DER `SEQUENCE` for
+    /// ECDSA; the RSA-PSS octet string for RSA — TLS 1.3 forbids PKCS#1 v1.5).
+    /// Implementations hash `message` with the scheme's digest before invoking
+    /// the store's hash-signing primitive.
     ///
     /// # Errors
     /// [`SignerError`] if the store rejects the operation.
