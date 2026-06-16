@@ -104,14 +104,12 @@ pub fn build_driver(
     use fips_tls::signer::RemoteSigner;
 
     let signer: Arc<dyn RemoteSigner> = match kind {
-        SessionKind::Machine => Arc::new(
-            creds::cng::machine_signer(selector)
-                .map_err(|e| BuildError::Credential(format!("{e:?}")))?,
-        ),
-        SessionKind::User => Arc::new(
-            creds::cng::user_signer(selector)
-                .map_err(|e| BuildError::Credential(format!("{e:?}")))?,
-        ),
+        SessionKind::Machine => {
+            Arc::new(creds::cng::machine_signer(selector).map_err(BuildError::Credential)?)
+        }
+        SessionKind::User => {
+            Arc::new(creds::cng::user_signer(selector).map_err(BuildError::Credential)?)
+        }
     };
     let client_auth = RemoteCertResolver::new(signer).into_client_auth();
     assemble_driver(kind, cfg, client_auth)
