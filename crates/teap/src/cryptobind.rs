@@ -13,6 +13,9 @@ use crate::tlv::CryptoBindingTlv;
 pub const CB_SUBTYPE_REQUEST: u8 = 1;
 /// Crypto-Binding sub-type: peer→server Binding Response.
 pub const CB_SUBTYPE_RESPONSE: u8 = 2;
+/// The only TEAP version `usg-TEAP/1.3` negotiates. Both the Crypto-Binding
+/// `version` and `received_version` fields must equal this.
+pub const TEAP_VERSION: u8 = 1;
 
 /// Constant-time equality. Runs in time dependent only on `a.len()`, never on
 /// content, and is independent of where the first mismatch occurs.

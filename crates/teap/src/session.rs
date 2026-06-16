@@ -13,13 +13,24 @@
 //! success. In particular an Intermediate-Result/Result of `Success` is only
 //! honored when its Crypto-Binding verifies (the milestone-1 policy gate).
 
-use crate::cryptobind::{self, CB_SUBTYPE_RESPONSE};
+use crate::cryptobind::{self, CB_SUBTYPE_REQUEST, CB_SUBTYPE_RESPONSE, TEAP_VERSION};
 use crate::error::{CryptoBindError, KeyScheduleError};
-use crate::keyschedule::{Cmk, KeySchedule, TeapMac};
+use crate::keyschedule::{Cmk, IMSK_LEN, KeySchedule, TeapMac};
 use crate::tlv::{
     CryptoBindingTlv, EapPayloadTlv, IdentityType, IntermediateResultTlv, RawTlv, ResultStatus,
     ResultTlv, TlvError, VendorSpecificTlv, type_id,
 };
+use zeroize::Zeroizing;
+
+/// Critical TLV types that MUST appear at most once per message and MUST carry
+/// the Mandatory (M) bit (RFC 7170). Duplicates or a cleared M bit are rejected
+/// so the TLV that is acted on is exactly the one whose framing was validated.
+const CRITICAL_TYPES: [u16; 4] = [
+    type_id::IDENTITY_TYPE,
+    type_id::INTERMEDIATE_RESULT,
+    type_id::CRYPTO_BINDING,
+    type_id::RESULT,
+];
 
 /// Which identity this session authenticates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -101,6 +112,12 @@ pub enum FailReason {
     ServerFailure,
     /// Key-schedule error (e.g. bad IMSK length from the inner method).
     KeySchedule(KeyScheduleError),
+    /// A critical TLV appeared more than once, or with the Mandatory bit clear.
+    MalformedMessage,
+    /// The inner method reported an IMSK of the wrong length.
+    BadImsk,
+    /// The Crypto-Binding had an unexpected sub-type or version.
+    BadCryptoBindingFields,
 }
 
 /// Hard protocol/parse errors (the input was malformed enough that we cannot
@@ -140,7 +157,7 @@ pub struct TeapSession<'a> {
     inner: &'a mut dyn InnerMethod,
     ks: KeySchedule,
     cmk: Option<Cmk>,
-    imsk: Option<Vec<u8>>,
+    imsk: Option<Zeroizing<Vec<u8>>>,
     presented_mat: bool,
     terminated: bool,
 }
@@ -190,6 +207,18 @@ impl<'a> TeapSession<'a> {
         }
         let mut out: Vec<RawTlv> = Vec::new();
 
+        // 0. Reject malformed messages: a critical TLV appearing more than once,
+        //    or with the Mandatory bit clear. This guarantees the TLV we act on
+        //    is the same one whose framing we validated (no duplicate-TLV split).
+        for &t in &CRITICAL_TYPES {
+            let mut seen = inbound.iter().filter(|x| x.tlv_type == t);
+            if let Some(first) = seen.next()
+                && (!first.mandatory || seen.next().is_some())
+            {
+                return Ok(self.fail_step(out, FailReason::MalformedMessage));
+            }
+        }
+
         // 1. Identity-Type — validate against our configured identity.
         if let Some(raw) = find(inbound, type_id::IDENTITY_TYPE) {
             let it = IdentityType::from_value(&raw.value)?;
@@ -216,7 +245,14 @@ impl<'a> TeapSession<'a> {
                 InnerStep::Respond(resp) => {
                     out.push(EapPayloadTlv { eap: resp }.to_tlv(true));
                 }
-                InnerStep::Done(imsk) => self.imsk = Some(imsk),
+                InnerStep::Done(imsk) => {
+                    // Validate length at capture for a clear failure and to
+                    // avoid retaining bad key material.
+                    if imsk.len() != IMSK_LEN {
+                        return Ok(self.fail_step(out, FailReason::BadImsk));
+                    }
+                    self.imsk = Some(Zeroizing::new(imsk));
+                }
                 InnerStep::Failed => return Ok(self.fail_step(out, FailReason::InnerFailed)),
             }
         }
@@ -278,6 +314,20 @@ impl<'a> TeapSession<'a> {
             )));
         };
 
+        // Directionality + version are part of the MAC'd value but mean nothing
+        // unless we also assert them: the server must send a Binding *Request*
+        // at the one version `usg-TEAP/1.3` negotiates. Reject reflected
+        // Responses and version confusion before trusting the MAC.
+        if cb.sub_type != CB_SUBTYPE_REQUEST
+            || cb.version != TEAP_VERSION
+            || cb.received_version != TEAP_VERSION
+        {
+            return Ok(Some(self.fail_step(
+                core::mem::take(out),
+                FailReason::BadCryptoBindingFields,
+            )));
+        }
+
         // Clone the small CMK so the rest of this method can call `&mut self`
         // helpers without holding a borrow of `self.cmk`. Unreachable `None`
         // (set just above) still fails closed rather than panicking.
@@ -329,8 +379,13 @@ impl<'a> TeapSession<'a> {
             Ok(keys) => keys,
             Err(e) => return Ok(self.fail_step(out, FailReason::KeySchedule(e))),
         };
-        // A machine session may receive a freshly issued MAT to persist.
-        let issued_mat = find_mat(inbound, self.cfg.mat_vendor_id)?;
+        // Only a machine session may capture a server-issued MAT to persist; a
+        // user session must never accept a planted ticket.
+        let issued_mat = if self.cfg.identity == Identity::Machine {
+            find_mat(inbound, self.cfg.mat_vendor_id)?
+        } else {
+            None
+        };
 
         out.push(ResultTlv(ResultStatus::Success).to_tlv(true));
         self.terminated = true;

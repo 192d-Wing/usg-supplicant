@@ -319,3 +319,99 @@ fn server_result_failure_fails_closed() {
         .unwrap();
     assert_fail(step, FailReason::ServerFailure);
 }
+
+#[test]
+fn duplicate_critical_tlv_fails_closed() {
+    let mac = RefSha384;
+    let mut inner = ScriptedInner::new(vec![]);
+    let mut s = machine_session(&mac, &mut inner);
+    let step = s
+        .step(&[
+            ResultTlv(ResultStatus::Success).to_tlv(true),
+            ResultTlv(ResultStatus::Failure).to_tlv(true),
+        ])
+        .unwrap();
+    assert_fail(step, FailReason::MalformedMessage);
+}
+
+#[test]
+fn non_mandatory_critical_tlv_fails_closed() {
+    let mac = RefSha384;
+    let mut inner = ScriptedInner::new(vec![]);
+    let mut s = machine_session(&mac, &mut inner);
+    let step = s
+        .step(&[ResultTlv(ResultStatus::Success).to_tlv(false)])
+        .unwrap();
+    assert_fail(step, FailReason::MalformedMessage);
+}
+
+#[test]
+fn bad_imsk_length_fails_closed() {
+    let mac = RefSha384;
+    let mut inner = ScriptedInner::new(vec![InnerStep::Done(vec![0u8; 16])]);
+    let mut s = machine_session(&mac, &mut inner);
+    let step = s.step(&[eap_payload(b"start")]).unwrap();
+    assert_fail(step, FailReason::BadImsk);
+}
+
+#[test]
+fn crypto_binding_wrong_subtype_fails_closed() {
+    let mac = RefSha384;
+    let mut inner = ScriptedInner::new(vec![InnerStep::Done(imsk())]);
+    let mut s = machine_session(&mac, &mut inner);
+    s.step(&[eap_payload(b"start")]).unwrap();
+
+    // A correctly-MAC'd CB, but typed as a Binding RESPONSE (not Request).
+    let cmk = server_cmk(&imsk());
+    let mut cb = CryptoBindingTlv {
+        version: 1,
+        received_version: 1,
+        sub_type: CB_SUBTYPE_RESPONSE,
+        nonce: [0x77; 32],
+        emsk_compound_mac: vec![],
+        msk_compound_mac: vec![],
+    };
+    seal(&RefSha384, &cmk, &mut cb).unwrap();
+    let step = s.step(&[ir_success_with_cb(&cb)]).unwrap();
+    assert_fail(step, FailReason::BadCryptoBindingFields);
+}
+
+#[test]
+fn user_session_does_not_capture_issued_mat() {
+    let mac = RefSha384;
+    let imsk = imsk();
+    let mut inner = ScriptedInner::new(vec![InnerStep::Done(imsk.clone())]);
+    let cfg = SessionConfig {
+        identity: Identity::User,
+        mat_vendor_id: VENDOR_ID,
+        mat_to_present: None,
+    };
+    let mut s = TeapSession::new(cfg, &seed(), &mac, &mut inner).unwrap();
+
+    s.step(&[IdentityType::User.to_tlv(true), eap_payload(b"start")])
+        .unwrap();
+    let cmk = server_cmk(&imsk);
+    let cb = server_request_cb(&cmk);
+    s.step(&[ir_success_with_cb(&cb)]).unwrap();
+
+    // Server sends a MAT in the user session — it MUST be ignored.
+    let mat = VendorSpecificTlv {
+        vendor_id: VENDOR_ID,
+        data: b"planted".to_vec(),
+    };
+    let step = s
+        .step(&[
+            ResultTlv(ResultStatus::Success).to_tlv(true),
+            mat.to_tlv(true),
+        ])
+        .unwrap();
+    match step {
+        Step::Done {
+            outcome: Outcome::Success { issued_mat, .. },
+            ..
+        } => {
+            assert_eq!(issued_mat, None);
+        }
+        other => panic!("expected user success, got {other:?}"),
+    }
+}

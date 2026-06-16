@@ -122,6 +122,18 @@ deterministic path:
   receiver MUST reject a Crypto-Binding whose EMSK Compound MAC is non-zero.
 - Each side computes the MSK Compound MAC and verifies the peer's with a
   **constant-time** comparison; mismatch ⇒ fail closed.
+- The peer additionally rejects a Crypto-Binding whose `sub_type` is not a
+  Binding **Request** or whose `version`/`received_version` ≠ `TEAP_VERSION`
+  (1), before trusting the MAC.
+
+**Replay protection (PIN):** anti-replay rests on `session_key_seed` being
+unique per TEAP session. The TLS 1.3 exporter (§3.1) MUST be keyed by the
+specific handshake, so `S-IMCK[0]`, `CMK`, and every Compound MAC are unique
+per session — a Crypto-Binding captured from one session cannot verify in
+another. **The TLS backend MUST guarantee a fresh exporter per session** (no
+resumption that would reuse exporter output for a distinct TEAP run). The
+32-octet Crypto-Binding nonce is MAC-covered but is *not* relied on for
+freshness; seed uniqueness is the guarantee.
 
 ### 3.5 Exported MSK to dot3svc (port keys)
 ```

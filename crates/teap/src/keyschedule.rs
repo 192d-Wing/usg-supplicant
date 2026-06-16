@@ -13,6 +13,7 @@
 //! - `MSK` / `EMSK`: 64
 
 use crate::error::KeyScheduleError;
+use zeroize::Zeroizing;
 
 /// Length of `session_key_seed` and each `S-IMCK` (octets).
 pub const S_IMCK_LEN: usize = 40;
@@ -45,9 +46,10 @@ pub trait TeapMac {
     fn hmac(&self, key: &[u8], data: &[u8]) -> Vec<u8>;
 }
 
-/// A Compound MAC Key (`CMK[j]`), used to MAC the Crypto-Binding TLV.
+/// A Compound MAC Key (`CMK[j]`), used to MAC the Crypto-Binding TLV. The key
+/// material is scrubbed on drop.
 #[derive(Clone, PartialEq, Eq)]
-pub struct Cmk(Vec<u8>);
+pub struct Cmk(Zeroizing<Vec<u8>>);
 
 impl Cmk {
     /// The raw key octets.
@@ -118,8 +120,8 @@ fn hkdf_expand(
 /// [`KeySchedule::derive_session_keys`].
 #[derive(Clone)]
 pub struct KeySchedule {
-    /// Current `S-IMCK` (always [`S_IMCK_LEN`] octets).
-    s_imck: Vec<u8>,
+    /// Current `S-IMCK` (always [`S_IMCK_LEN`] octets), scrubbed on drop.
+    s_imck: Zeroizing<Vec<u8>>,
     /// Number of inner methods absorbed.
     methods: usize,
 }
@@ -146,7 +148,7 @@ impl KeySchedule {
             });
         }
         Ok(Self {
-            s_imck: session_key_seed.to_vec(),
+            s_imck: Zeroizing::new(session_key_seed.to_vec()),
             methods: 0,
         })
     }
@@ -190,9 +192,9 @@ impl KeySchedule {
             .get(S_IMCK_LEN..IMCK_LEN)
             .ok_or(KeyScheduleError::Internal)?;
 
-        self.s_imck = next.to_vec();
+        self.s_imck = Zeroizing::new(next.to_vec());
         self.methods = self.methods.saturating_add(1);
-        Ok(Cmk(cmk.to_vec()))
+        Ok(Cmk(Zeroizing::new(cmk.to_vec())))
     }
 
     /// Derive the exported `(MSK, EMSK)` from the final `S-IMCK`.
