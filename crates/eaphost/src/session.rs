@@ -55,6 +55,10 @@ impl TeapStep for supplicant::driver::TeapDriver {
 pub enum ProcessAction {
     /// A response packet is ready: fetch it with [`PeerSession::take_response`]
     /// and send it; the exchange continues.
+    ///
+    /// Invariant: a continue step always yields exactly one complete, non-empty
+    /// EAP packet — the driver emits at least a TEAP ACK every round, so there is
+    /// no "discard / no response this round" case for the FFI to model.
     Respond,
     /// The exchange is terminal: read the verdict with [`PeerSession::result`].
     /// A final response packet may still be queued (check `take_response`).
@@ -140,6 +144,11 @@ impl<D: TeapStep> PeerSession<D> {
     }
 
     /// Take the buffered response packet, if any (`EapPeerGetResponsePacket`).
+    ///
+    /// Holds exactly one response: the `EAPHost` contract is to consume it (one
+    /// `EapPeerGetResponsePacket`) between successive `process` calls. Calling
+    /// `process` again before taking would overwrite the prior, unsent response —
+    /// the FFI shim must preserve that ordering.
     pub fn take_response(&mut self) -> Option<Vec<u8>> {
         self.pending_response.take()
     }
