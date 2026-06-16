@@ -40,6 +40,7 @@ pub mod builder;
 pub mod error;
 pub mod os_fips;
 pub mod session;
+pub mod session_registry;
 
 /// Registry location under which an `EAPHost` peer method is registered.
 pub const EAPHOST_METHODS_KEY: &str = r"SYSTEM\CurrentControlSet\Services\EapHost\Methods";
