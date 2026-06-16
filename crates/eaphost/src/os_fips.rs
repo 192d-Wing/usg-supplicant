@@ -21,7 +21,7 @@ pub fn fips_policy_enabled() -> Result<bool, EapHostError> {
     let mut value: u32 = 0;
     let mut size: u32 = u32::try_from(core::mem::size_of::<u32>()).unwrap_or(4);
     // SAFETY: out-params are owned locals; `value`/`size` are sized for a DWORD,
-    // and RRF_RT_REG_DWORD restricts the type so DPAPI writes at most 4 octets.
+    // and RRF_RT_REG_DWORD restricts the type so RegGetValueW writes at most 4 octets.
     let status = unsafe {
         RegGetValueW(
             HKEY_LOCAL_MACHINE,
