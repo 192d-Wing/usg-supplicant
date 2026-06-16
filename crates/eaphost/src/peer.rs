@@ -177,6 +177,11 @@ extern "system" fn EapPeerBeginSession(
 /// Safe core of `EapPeerBeginSession`: blob -> profile -> credential -> driver ->
 /// registered session handle. `None` on any failure (fail closed).
 fn begin_session(blob: &[u8]) -> Option<u64> {
+    // Per-session OS FIPS gate (WINDOWS_DEV.md §4.1 step 5, DESIGN.md §3): the
+    // CNG/smartcard signing half of the FIPS boundary is only valid under OS FIPS
+    // mode, and the policy is read live — so re-assert it at each BeginSession,
+    // not just at Initialize. Fail closed.
+    assert_fips_policy().ok()?;
     let cfg = SessionConfigBlob::from_bytes(blob).ok()?;
     let (identity, kind) = if cfg.machine {
         (Identity::Machine, SessionKind::Machine)

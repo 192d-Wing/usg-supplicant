@@ -16,7 +16,10 @@ const VERSION: u8 = 1;
 const FLAG_MACHINE: u8 = 0b0000_0001;
 
 /// The decoded per-session profile.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `Debug` is hand-written to redact the MAT (an authorization-bearing ticket)
+/// and the trust-anchor DER, matching `pac`'s treatment of the same ticket.
+#[derive(Clone, PartialEq, Eq)]
 pub struct SessionConfigBlob {
     /// Machine session (boot) vs user session (logon).
     pub machine: bool,
@@ -35,6 +38,20 @@ pub struct SessionConfigBlob {
     pub mat: Option<Vec<u8>>,
 }
 
+impl core::fmt::Debug for SessionConfigBlob {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("SessionConfigBlob")
+            .field("machine", &self.machine)
+            .field("server_name", &self.server_name)
+            .field("mat_vendor_id", &self.mat_vendor_id)
+            .field("max_fragment", &self.max_fragment)
+            .field("selector_subject", &self.selector_subject)
+            .field("roots", &self.roots.len())
+            .field("has_mat", &self.mat.is_some())
+            .finish()
+    }
+}
+
 impl SessionConfigBlob {
     /// Serialize to the wire format.
     #[must_use]
@@ -47,9 +64,9 @@ impl SessionConfigBlob {
         out.extend_from_slice(&self.max_fragment.to_le_bytes());
         put_bytes(&mut out, self.server_name.as_bytes());
         put_bytes(&mut out, self.selector_subject.as_bytes());
-        put_u16(
+        put_u32(
             &mut out,
-            u16::try_from(self.roots.len()).unwrap_or(u16::MAX),
+            u32::try_from(self.roots.len()).unwrap_or(u32::MAX),
         );
         for der in &self.roots {
             put_bytes(&mut out, der);
@@ -82,8 +99,11 @@ impl SessionConfigBlob {
         let server_name = r.string()?;
         let selector_subject = r.string()?;
 
-        let num_roots = r.u16().ok_or(ConfigError::Truncated)?;
-        let mut roots = Vec::with_capacity(usize::from(num_roots));
+        let num_roots = r.u32().ok_or(ConfigError::Truncated)?;
+        // Do NOT pre-allocate from the (attacker-influenceable) count; grow as
+        // each root is actually read, so a bogus count fails fast on the first
+        // truncated read instead of forcing a large up-front allocation.
+        let mut roots = Vec::new();
         for _ in 0..num_roots {
             roots.push(r.bytes()?.to_vec());
         }
@@ -107,12 +127,12 @@ impl SessionConfigBlob {
     }
 }
 
-fn put_u16(out: &mut Vec<u8>, n: u16) {
+fn put_u32(out: &mut Vec<u8>, n: u32) {
     out.extend_from_slice(&n.to_le_bytes());
 }
 
 fn put_bytes(out: &mut Vec<u8>, b: &[u8]) {
-    put_u16(out, u16::try_from(b.len()).unwrap_or(u16::MAX));
+    put_u32(out, u32::try_from(b.len()).unwrap_or(u32::MAX));
     out.extend_from_slice(b);
 }
 
@@ -142,23 +162,19 @@ impl<'a> Reader<'a> {
         self.take(1).and_then(|s| s.first().copied())
     }
 
-    fn u16(&mut self) -> Option<u16> {
-        let s: [u8; 2] = self.take(2)?.try_into().ok()?;
-        Some(u16::from_le_bytes(s))
-    }
-
     fn u32(&mut self) -> Option<u32> {
         let s: [u8; 4] = self.take(4)?.try_into().ok()?;
         Some(u32::from_le_bytes(s))
     }
 
-    /// A `u16`-length-prefixed byte slice.
+    /// A `u32`-length-prefixed byte slice.
     fn bytes(&mut self) -> Result<&'a [u8], ConfigError> {
-        let len = self.u16().ok_or(ConfigError::Truncated)?;
-        self.take(usize::from(len)).ok_or(ConfigError::Truncated)
+        let len = self.u32().ok_or(ConfigError::Truncated)?;
+        let len = usize::try_from(len).map_err(|_| ConfigError::Truncated)?;
+        self.take(len).ok_or(ConfigError::Truncated)
     }
 
-    /// A `u16`-length-prefixed UTF-8 string.
+    /// A `u32`-length-prefixed UTF-8 string.
     fn string(&mut self) -> Result<String, ConfigError> {
         let raw = self.bytes()?;
         core::str::from_utf8(raw)

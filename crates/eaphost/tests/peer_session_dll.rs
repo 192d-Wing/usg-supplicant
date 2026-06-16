@@ -88,8 +88,10 @@ fn teap_start() -> Vec<u8> {
 #[test]
 #[ignore = "needs the cdylib built + a provisioned cert; set USG_CNG_TEST_SUBJECT"]
 fn dll_begins_session_and_emits_client_hello() {
-    let subject = std::env::var("USG_CNG_TEST_SUBJECT")
-        .expect("set USG_CNG_TEST_SUBJECT to the provisioned cert subject");
+    // On a non-FIPS host the FIPS gate trips before cert selection, so a
+    // placeholder subject is fine; a FIPS host needs the real provisioned cert.
+    let subject =
+        std::env::var("USG_CNG_TEST_SUBJECT").unwrap_or_else(|_| "USG-DLL-TEST".to_string());
     let blob = SessionConfigBlob {
         machine: false, // user session -> Current User\My, no admin
         server_name: "teap.test.local".to_string(),
@@ -140,6 +142,17 @@ fn dll_begins_session_and_emits_client_hello() {
             &raw mut handle,
             &raw mut err,
         );
+        // BeginSession enforces the per-session OS FIPS gate. On a non-FIPS host
+        // (this dev box) it MUST fail closed; the full ClientHello flow below only
+        // runs on a FIPS-mode host.
+        if !matches!(eaphost::os_fips::fips_policy_enabled(), Ok(true)) {
+            assert_ne!(rc, 0, "BeginSession must fail closed when OS FIPS is off");
+            eprintln!(
+                "non-FIPS host: DLL BeginSession failed closed at the FIPS gate — OK (full flow needs FIPS mode)"
+            );
+            let _ = lib;
+            return;
+        }
         assert_eq!(rc, 0, "BeginSession should build the driver");
         assert!(!handle.is_null(), "a session handle was returned");
 
