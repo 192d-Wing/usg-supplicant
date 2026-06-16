@@ -8,6 +8,9 @@ authors.workspace = true
 description = "Windows EAPHost integration for the TEAP supplicant: OS FIPS-policy gate, EAP method registration, and (later) the peer-method DLL shim driven by dot3svc."
 
 [dependencies]
+# Platform-independent TEAP orchestration the peer-method shim drives.
+supplicant = { path = "../supplicant" }
+teap = { path = "../teap" }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [
