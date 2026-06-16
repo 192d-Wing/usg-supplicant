@@ -1,0 +1,11 @@
+[package]
+name = "kat"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Shared known-answer-test vectors and hex helpers for usg-supplicant and usg-radius"
+
+[lints]
+workspace = true
