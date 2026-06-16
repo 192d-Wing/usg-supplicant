@@ -42,6 +42,10 @@ pub enum ClientAuth {
         /// The matching private key.
         key: PrivateKeyDer<'static>,
     },
+    /// A custom client-certificate resolver. The `creds` crate supplies one that
+    /// presents a CNG/smartcard certificate and signs via a non-exportable key
+    /// (the production path: keys never leave their store).
+    Resolver(Arc<dyn rustls::client::ResolvesClientCert>),
 }
 
 /// Build a TLS 1.3 client config pinned to the FIPS provider and the given trust
@@ -60,6 +64,7 @@ pub fn client_config(
     let config = match client_auth {
         ClientAuth::None => builder.with_no_client_auth(),
         ClientAuth::SoftwareCert { chain, key } => builder.with_client_auth_cert(chain, key)?,
+        ClientAuth::Resolver(resolver) => builder.with_client_cert_resolver(resolver),
     };
     Ok(Arc::new(config))
 }

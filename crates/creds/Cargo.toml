@@ -1,0 +1,45 @@
+[package]
+name = "creds"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Certificate/key providers for usg-supplicant: Windows CNG machine cert and smartcard (CAC/PIV, SIPR token) user cert, exposed as non-exportable RemoteSigners."
+
+[dependencies]
+fips-tls = { path = "../fips-tls" }
+rustls = { version = "0.23", default-features = false, features = ["std", "aws_lc_rs"] }
+aws-lc-rs = "1"
+x509-parser = "0.18"
+zeroize = { version = "1.9", default-features = false }
+
+[target.'cfg(windows)'.dependencies]
+# CNG (NCrypt/BCrypt) + cert store APIs for machine and smartcard keys.
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Security_Cryptography",
+] }
+
+[dev-dependencies]
+rcgen = "0.13"
+
+# This crate cannot use the workspace `unsafe_code = forbid` lint because the
+# Windows CNG/smartcard FFI requires `unsafe`. We mirror the security baseline
+# here and confine `unsafe` to the `#[cfg(windows)]` modules (justified in-line);
+# non-Windows builds additionally `#![forbid(unsafe_code)]` in lib.rs.
+[lints.rust]
+missing_debug_implementations = "warn"
+unreachable_pub = "warn"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+indexing_slicing = "deny"
+cast_possible_truncation = "deny"
+cast_possible_wrap = "deny"
+cast_sign_loss = "deny"
+arithmetic_side_effects = "deny"
