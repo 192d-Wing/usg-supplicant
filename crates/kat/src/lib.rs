@@ -89,3 +89,35 @@ pub mod tlv_vectors {
         0x02, 0x01, 0x00, 0x08, 0x01, b'a', b'b', 0x00,
     ];
 }
+
+/// Frozen `usg-TEAP/1.3` key-schedule known-answer vectors (SERVER-CONTRACT.md
+/// §3). Both usg-supplicant and usg-radius MUST reproduce these exactly from an
+/// independent HMAC/SHA implementation.
+///
+/// Inputs (shared):
+/// - `session_key_seed` = octets `00 01 .. 27` (40 bytes)
+/// - `IMSK`             = octets `40 41 .. 5f` (32 bytes)
+/// - Crypto-Binding: version=1, `received_version`=1, `sub_type`=1, nonce = `10`×32
+pub mod keyschedule_vectors {
+    /// `session_key_seed` input (40 octets, `00..27`).
+    pub const SEED_HEX: &str =
+        "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f2021222324252627";
+    /// `IMSK` input (32 octets, `40..5f`).
+    pub const IMSK_HEX: &str = "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f";
+
+    /// CMK[1] under HMAC-SHA-384 (20 octets).
+    pub const SHA384_CMK_HEX: &str = "ec65075ade52c48f9001de7170e56e8a61470bf3";
+    /// Exported MSK under HMAC-SHA-384 (64 octets).
+    pub const SHA384_MSK_HEX: &str = "d7a3eda0be0678a6ddec2a9e997f929eacce447cb764924beaf11ce57496c698caddce5a42b2653aa01c9e03c63febf1dd4de6ad3e996a772bb9a240492717b9";
+    /// Exported EMSK under HMAC-SHA-384 (64 octets).
+    pub const SHA384_EMSK_HEX: &str = "c5caaeb66a6ef1e909d4cb5b8f2fcf81d0477c09d6129ee3ebd789e6e9d33fa7ee7b0a0ebea55123067f5ae858f5a81c106a4323439343036a5217add9f3ce95";
+    /// MSK Compound MAC under HMAC-SHA-384 for the fixed Crypto-Binding (48 octets).
+    pub const SHA384_CB_MSK_MAC_HEX: &str = "37c3886d7bf8161722f120a61dfeca831b39d2fe03f12d0aff52892126892d77db39bb1f004ed455274cee831ca8018c";
+
+    /// CMK[1] under HMAC-SHA-256 (20 octets).
+    pub const SHA256_CMK_HEX: &str = "b80e91d0c7f5c87b375db2df2a57f89143168646";
+    /// Exported MSK under HMAC-SHA-256 (64 octets).
+    pub const SHA256_MSK_HEX: &str = "f289867655337dc4f4d6a6098285fe2984f7c94e750ef7386ef297b85983629e8235bfc3a519878c649dc4224d008558f842b0fef9a359c00becd11ed4378f23";
+    /// Exported EMSK under HMAC-SHA-256 (64 octets).
+    pub const SHA256_EMSK_HEX: &str = "ec12e38d0e2648730ffd1d476a6df4325830102e556d1a478e79b49ff332d5a6a90e7c2645e2e37bcccd0f88708ccd1221724966d9332a6180cdabc26866b188";
+}
