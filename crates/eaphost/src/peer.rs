@@ -126,6 +126,18 @@ pub unsafe extern "system" fn EapPeerGetInfo(
     ERROR_SUCCESS.0
 }
 
+/// Free an `EAP_ERROR` previously returned by this method. The second
+/// by-name export `EAPHost` requires (alongside `EapPeerGetInfo`). We never
+/// allocate `EAP_ERROR` objects — errors are reported via the return code with
+/// `*ppEapError` left null — so this is a no-op, but the symbol must exist or
+/// `EAPHost` fails routine calls with `ERROR_PROC_NOT_FOUND`.
+///
+/// # Safety
+/// FFI export called by `EAPHost`. The argument is ignored: this method never
+/// allocates an `EAP_ERROR` (so `EAPHost` never has one of ours to free here).
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn EapPeerFreeErrorMemory(_p_eap_error: *mut EAP_ERROR) {}
+
 /// Per-DLL initialization. Gates on the OS FIPS policy and fails closed when the
 /// host is not in FIPS mode (DESIGN §3 — the CNG/smartcard signing half of the
 /// FIPS boundary is only valid under OS FIPS mode).
