@@ -52,3 +52,32 @@ impl core::fmt::Display for BuildError {
 }
 
 impl std::error::Error for BuildError {}
+
+/// Errors parsing the `EAPHost` connection-data config blob.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConfigError {
+    /// The blob did not start with the expected magic.
+    BadMagic,
+    /// The blob format version is not understood.
+    BadVersion,
+    /// The blob ended mid-field.
+    Truncated,
+    /// A length-prefixed field claimed more bytes than remain.
+    TrailingData,
+    /// A string field was not valid UTF-8.
+    BadUtf8,
+}
+
+impl core::fmt::Display for ConfigError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::BadMagic => write!(f, "config blob has a bad magic prefix"),
+            Self::BadVersion => write!(f, "config blob version not understood"),
+            Self::Truncated => write!(f, "config blob is truncated"),
+            Self::TrailingData => write!(f, "config blob has trailing data"),
+            Self::BadUtf8 => write!(f, "config blob string field is not valid UTF-8"),
+        }
+    }
+}
+
+impl std::error::Error for ConfigError {}

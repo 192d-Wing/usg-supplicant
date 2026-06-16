@@ -33,8 +33,16 @@ use windows::Win32::Security::ExtensibleAuthenticationProtocol::{
     EapPeerMethodResultReason,
 };
 
+use creds::selection::CertSelector;
+use rustls::RootCertStore;
+use rustls::pki_types::CertificateDer;
+use supplicant::driver::DriverConfig;
+use teap::session::Identity;
+
+use crate::builder::build_driver;
+use crate::config::SessionConfigBlob;
 use crate::os_fips::assert_fips_policy;
-use crate::session::{AuthResult, ProcessAction};
+use crate::session::{AuthResult, PeerSession, ProcessAction, SessionKind};
 use crate::session_registry::SessionRegistry;
 
 /// EAP type 55 (TEAP). A distinct **Author ID** in the registry (registration)
@@ -60,8 +68,6 @@ fn registry() -> &'static SessionRegistry<supplicant::driver::TeapDriver> {
 }
 
 /// Carry a registry handle in an `EAP_SESSION_HANDLE` (`VOID*`), and back.
-// Used by `EapPeerBeginSession` once the config-blob format (§4.1 step 4) is wired.
-#[allow(dead_code)]
 fn handle_to_ptr(handle: u64) -> *mut c_void {
     handle as usize as *mut c_void
 }
@@ -136,15 +142,15 @@ extern "system" fn EapPeerShutdown(pp_eap_error: *mut *mut EAP_ERROR) -> u32 {
     ERROR_SUCCESS.0
 }
 
-/// Begin a session. The connection-data config blob (§4.1 step 4: trust anchors,
-/// server name, cert selection, identity) is not yet wired, so this fails closed
-/// for now; the loading / lifecycle ABI is what the self-hosted test validates.
+/// Begin a session: parse the connection-data config blob into the session
+/// profile, select the machine/user credential, build the driver, and register
+/// it — returning an opaque handle. Fails closed on a bad blob or credential.
 extern "system" fn EapPeerBeginSession(
     _dw_flags: u32,
     _p_attribute_array: *const c_void,
     _h_token_impersonate_user: HANDLE,
-    _cb_connection_data: u32,
-    _p_connection_data: *const u8,
+    cb_connection_data: u32,
+    p_connection_data: *const u8,
     _cb_user_data: u32,
     _p_user_data: *const u8,
     _dw_max_send_packet_size: u32,
@@ -152,13 +158,54 @@ extern "system" fn EapPeerBeginSession(
     pp_eap_error: *mut *mut EAP_ERROR,
 ) -> u32 {
     unsafe { clear_error(pp_eap_error) };
-    if p_session_handle.is_null() {
+    if p_session_handle.is_null() || p_connection_data.is_null() {
         return E_FAIL;
     }
-    // TODO(§4.1 step 4): parse the connection-data blob -> DriverConfig + roots +
-    // CertSelector, build_driver, registry().begin -> handle. Until the config
-    // format is defined, fail closed rather than guess a credential.
-    NOT_SUPPORTED
+    // SAFETY: the caller guarantees `cb_connection_data` bytes at the pointer.
+    let blob =
+        unsafe { core::slice::from_raw_parts(p_connection_data, cb_connection_data as usize) };
+    match begin_session(blob) {
+        Some(handle) => {
+            // SAFETY: `p_session_handle` is the caller's writable out-handle.
+            unsafe { *p_session_handle = handle_to_ptr(handle) };
+            ERROR_SUCCESS.0
+        }
+        None => E_FAIL,
+    }
+}
+
+/// Safe core of `EapPeerBeginSession`: blob -> profile -> credential -> driver ->
+/// registered session handle. `None` on any failure (fail closed).
+fn begin_session(blob: &[u8]) -> Option<u64> {
+    // Per-session OS FIPS gate (WINDOWS_DEV.md §4.1 step 5, DESIGN.md §3): the
+    // CNG/smartcard signing half of the FIPS boundary is only valid under OS FIPS
+    // mode, and the policy is read live — so re-assert it at each BeginSession,
+    // not just at Initialize. Fail closed.
+    assert_fips_policy().ok()?;
+    let cfg = SessionConfigBlob::from_bytes(blob).ok()?;
+    let (identity, kind) = if cfg.machine {
+        (Identity::Machine, SessionKind::Machine)
+    } else {
+        (Identity::User, SessionKind::User)
+    };
+    let mut roots = RootCertStore::empty();
+    for der in cfg.roots {
+        roots.add(CertificateDer::from(der)).ok()?;
+    }
+    let selector = CertSelector {
+        require_client_auth_eku: true,
+        subject_contains: Some(cfg.selector_subject),
+        ..Default::default()
+    };
+    let driver_cfg = DriverConfig {
+        identity,
+        server_name: cfg.server_name,
+        mat_vendor_id: cfg.mat_vendor_id,
+        mat_to_present: cfg.mat,
+        max_fragment: cfg.max_fragment as usize,
+    };
+    let driver = build_driver(driver_cfg, roots, &selector).ok()?;
+    Some(registry().begin(PeerSession::new(kind, driver)))
 }
 
 extern "system" fn EapPeerProcessRequestPacket(
