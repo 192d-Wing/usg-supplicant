@@ -11,7 +11,7 @@
     clippy::missing_panics_doc
 )]
 
-use std::io::Read as _;
+use std::io::{Read as _, Write as _};
 use std::sync::Arc;
 
 use fips_tls::backend::{ClientAuth, TeapTlsClient, client_config};
@@ -184,4 +184,23 @@ fn fips_self_check_matches_build() {
     } else {
         assert!(result.is_err(), "non-fips build must fail closed");
     }
+}
+
+#[test]
+fn server_to_client_app_data_unprotects() {
+    let server_cert = gen_server_cert();
+    let mut srv = server_conn(&server_cert);
+    let mut cli = client(&server_cert);
+    drive(&mut cli, &mut srv);
+    cli.finish_handshake().unwrap();
+
+    // Server sends application data post-handshake (incl. its NewSessionTickets);
+    // the client must unprotect it.
+    srv.writer().write_all(b"phase2-tlvs").unwrap();
+    let mut records = Vec::new();
+    while srv.wants_write() {
+        srv.write_tls(&mut records).unwrap();
+    }
+    let got = cli.unprotect(&records).unwrap();
+    assert_eq!(got, b"phase2-tlvs");
 }
