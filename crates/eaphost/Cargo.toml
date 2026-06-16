@@ -19,12 +19,6 @@ rustls = { version = "0.23", default-features = false, features = ["std", "aws_l
 # Scrub the exported MSK held in AuthResult on drop.
 zeroize = { version = "1.9", default-features = false, features = ["alloc"] }
 
-[dev-dependencies]
-# A software RemoteSigner / self-signed certs stand in for CNG in cross-platform
-# builder tests.
-rcgen = "0.13"
-aws-lc-rs = "1"
-
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [
     "Win32_Foundation",
