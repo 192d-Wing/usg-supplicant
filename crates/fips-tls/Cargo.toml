@@ -9,6 +9,9 @@ description = "FIPS TLS 1.3 backend for EAP-TEAP: aws-lc-rs provider, PQ-hybrid 
 
 [dependencies]
 teap = { path = "../teap" }
+# Canonical FIPS/PQ crypto core shared across the trio (provider + allow-list),
+# published at https://github.com/192d-Wing/usg-fips-tls.
+usg-fips-tls = "0.1"
 # TLS 1.3 only: default features dropped to exclude the tls12 code path.
 rustls = { version = "0.23", default-features = false, features = ["std", "aws_lc_rs"] }
 aws-lc-rs = "1"
@@ -24,7 +27,7 @@ rcgen = "0.13"
 # Dev/test builds run the non-FIPS provider so they compile without the FIPS
 # build toolchain; the runtime self-check (`assert_fips`) then fails closed.
 default = []
-fips = ["rustls/fips", "aws-lc-rs/fips"]
+fips = ["rustls/fips", "aws-lc-rs/fips", "usg-fips-tls/fips"]
 
 [lints]
 workspace = true
