@@ -11,8 +11,19 @@ description = "Windows EAPHost integration for the TEAP supplicant: OS FIPS-poli
 # Platform-independent TEAP orchestration the peer-method shim drives.
 supplicant = { path = "../supplicant" }
 teap = { path = "../teap" }
+# Credential providers (CNG machine cert / smartcard user cert; cert selection)
+# and the FIPS TLS backend used to assemble a session's driver.
+creds = { path = "../creds" }
+fips-tls = { path = "../fips-tls" }
+rustls = { version = "0.23", default-features = false, features = ["std", "aws_lc_rs"] }
 # Scrub the exported MSK held in AuthResult on drop.
 zeroize = { version = "1.9", default-features = false, features = ["alloc"] }
+
+[dev-dependencies]
+# A software RemoteSigner / self-signed certs stand in for CNG in cross-platform
+# builder tests.
+rcgen = "0.13"
+aws-lc-rs = "1"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [

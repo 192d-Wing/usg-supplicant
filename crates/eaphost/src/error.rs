@@ -27,3 +27,29 @@ impl core::fmt::Display for EapHostError {
 }
 
 impl std::error::Error for EapHostError {}
+
+/// Errors building a session's `TeapDriver` from its profile + credential.
+///
+/// Each variant carries a short description of the underlying error (the source
+/// types are not all `Clone`/`PartialEq`, so the detail is rendered to a string).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BuildError {
+    /// Selecting the certificate or acquiring its key failed (CNG/smartcard).
+    Credential(String),
+    /// Building the TLS client config or the inner EAP-TLS method failed.
+    Tls(String),
+    /// Building the TEAP driver failed.
+    Driver(String),
+}
+
+impl core::fmt::Display for BuildError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Credential(d) => write!(f, "credential selection/acquisition failed: {d}"),
+            Self::Tls(d) => write!(f, "inner TLS setup failed: {d}"),
+            Self::Driver(d) => write!(f, "driver construction failed: {d}"),
+        }
+    }
+}
+
+impl std::error::Error for BuildError {}
