@@ -1,0 +1,16 @@
+[package]
+name = "teap"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "EAP-TEAP (RFC 7170) protocol core: TLV codec, per-session state machine, crypto-binding, key schedule. Pure, no I/O, no unsafe."
+
+[dependencies]
+
+[dev-dependencies]
+kat = { path = "../kat" }
+
+[lints]
+workspace = true

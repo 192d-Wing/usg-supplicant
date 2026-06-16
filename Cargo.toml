@@ -1,0 +1,35 @@
+[workspace]
+resolver = "3"
+members = ["crates/teap", "crates/kat"]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.95"
+license = "MIT"
+authors = ["USG"]
+repository = "usg-supplicant"
+
+# Security baseline applied to every workspace crate that opts in with
+# `[lints] workspace = true`. Pure crates (teap, kat) additionally
+# `#![forbid(unsafe_code)]` in their crate root.
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_debug_implementations = "warn"
+unreachable_pub = "warn"
+rust_2024_compatibility = { level = "warn", priority = -1 }
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+# Panic-freedom on untrusted input: a malformed frame must never abort.
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+indexing_slicing = "deny"
+# No silent integer truncation/wrap on length fields.
+cast_possible_truncation = "deny"
+cast_possible_wrap = "deny"
+cast_sign_loss = "deny"
+# Untrusted length math must be explicit (checked/saturating), never a silent
+# wrap or debug-panic. Library code is held to this; tests opt out locally.
+arithmetic_side_effects = "deny"
