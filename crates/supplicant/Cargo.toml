@@ -17,6 +17,7 @@ rustls = { version = "0.23", default-features = false, features = ["std", "aws_l
 rcgen = "0.13"
 creds = { path = "../creds" }
 aws-lc-rs = "1"
+teap-test-harness = { path = "../teap-test-harness" }
 
 [lints]
 workspace = true
