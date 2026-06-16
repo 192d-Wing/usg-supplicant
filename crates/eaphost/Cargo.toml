@@ -1,0 +1,34 @@
+[package]
+name = "eaphost"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Windows EAPHost integration for the TEAP supplicant: OS FIPS-policy gate, EAP method registration, and (later) the peer-method DLL shim driven by dot3svc."
+
+[dependencies]
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_System_Registry",
+] }
+
+# Mirrors the security baseline; `unsafe` is permitted (Win32 FFI) but confined
+# to `#[cfg(windows)]` and forbidden elsewhere (see lib.rs).
+[lints.rust]
+missing_debug_implementations = "warn"
+unreachable_pub = "warn"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+indexing_slicing = "deny"
+cast_possible_truncation = "deny"
+cast_possible_wrap = "deny"
+cast_sign_loss = "deny"
+arithmetic_side_effects = "deny"
