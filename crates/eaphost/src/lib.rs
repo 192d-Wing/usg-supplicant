@@ -37,6 +37,7 @@
 /// Build a session driver from the Windows credential store (CNG/smartcard).
 #[cfg(windows)]
 pub mod builder;
+pub mod config;
 pub mod error;
 pub mod os_fips;
 /// The `EAPHost` peer-method C-ABI exports (the DLL `dot3svc` loads).
