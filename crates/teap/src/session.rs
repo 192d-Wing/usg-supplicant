@@ -151,10 +151,13 @@ pub enum Step {
 }
 
 /// The Phase-2 TEAP state machine for one session.
-pub struct TeapSession<'a> {
+///
+/// Owns its MAC and inner method (boxed) so it can be embedded in a driver
+/// without self-referential lifetimes.
+pub struct TeapSession {
     cfg: SessionConfig,
-    mac: &'a dyn TeapMac,
-    inner: &'a mut dyn InnerMethod,
+    mac: Box<dyn TeapMac>,
+    inner: Box<dyn InnerMethod>,
     ks: KeySchedule,
     cmk: Option<Cmk>,
     imsk: Option<Zeroizing<Vec<u8>>>,
@@ -162,27 +165,27 @@ pub struct TeapSession<'a> {
     terminated: bool,
 }
 
-impl core::fmt::Debug for TeapSession<'_> {
+impl core::fmt::Debug for TeapSession {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("TeapSession")
             .field("identity", &self.cfg.identity)
             .field("absorbed", &self.cmk.is_some())
             .field("terminated", &self.terminated)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
-impl<'a> TeapSession<'a> {
+impl TeapSession {
     /// Create a session. `session_key_seed` comes from the TLS exporter
-    /// (SERVER-CONTRACT §3.1); the MAC and inner method are injected.
+    /// (SERVER-CONTRACT §3.1); the MAC and inner method are injected (owned).
     ///
     /// # Errors
     /// [`KeyScheduleError::BadSeedLen`] if the seed is not 40 octets.
     pub fn new(
         cfg: SessionConfig,
         session_key_seed: &[u8],
-        mac: &'a dyn TeapMac,
-        inner: &'a mut dyn InnerMethod,
+        mac: Box<dyn TeapMac>,
+        inner: Box<dyn InnerMethod>,
     ) -> Result<Self, KeyScheduleError> {
         Ok(Self {
             cfg,
@@ -296,7 +299,7 @@ impl<'a> TeapSession<'a> {
         };
         // Absorb exactly once to obtain CMK[1].
         if self.cmk.is_none() {
-            match self.ks.absorb_inner(self.mac, &imsk) {
+            match self.ks.absorb_inner(&*self.mac, &imsk) {
                 Ok(cmk) => self.cmk = Some(cmk),
                 Err(e) => {
                     return Ok(Some(
@@ -338,7 +341,7 @@ impl<'a> TeapSession<'a> {
             )));
         };
 
-        if let Err(e) = cryptobind::verify(self.mac, &cmk, &cb) {
+        if let Err(e) = cryptobind::verify(&*self.mac, &cmk, &cb) {
             return Ok(Some(
                 self.fail_step(core::mem::take(out), FailReason::CryptoBinding(e)),
             ));
@@ -347,7 +350,7 @@ impl<'a> TeapSession<'a> {
         // Emit our Binding Response: echo the nonce, flip the sub-type, seal.
         let mut resp = cb.clone();
         resp.sub_type = CB_SUBTYPE_RESPONSE;
-        if let Err(e) = cryptobind::seal(self.mac, &cmk, &mut resp) {
+        if let Err(e) = cryptobind::seal(&*self.mac, &cmk, &mut resp) {
             return Ok(Some(
                 self.fail_step(core::mem::take(out), FailReason::CryptoBinding(e)),
             ));
@@ -375,7 +378,7 @@ impl<'a> TeapSession<'a> {
         if self.cmk.is_none() {
             return Ok(self.fail_step(out, FailReason::MissingCryptoBinding));
         }
-        let (msk, emsk) = match self.ks.derive_session_keys(self.mac) {
+        let (msk, emsk) = match self.ks.derive_session_keys(&*self.mac) {
             Ok(keys) => keys,
             Err(e) => return Ok(self.fail_step(out, FailReason::KeySchedule(e))),
         };
