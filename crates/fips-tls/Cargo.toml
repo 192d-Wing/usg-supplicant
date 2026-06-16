@@ -1,0 +1,30 @@
+[package]
+name = "fips-tls"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "FIPS TLS 1.3 backend for EAP-TEAP: aws-lc-rs provider, PQ-hybrid (ML-KEM) key exchange, RFC 8446 exporter, and the CNG/smartcard signing seam."
+
+[dependencies]
+teap = { path = "../teap" }
+# TLS 1.3 only: default features dropped to exclude the tls12 code path.
+rustls = { version = "0.23", default-features = false, features = ["std", "aws_lc_rs"] }
+aws-lc-rs = "1"
+# Scrub the exported session_key_seed on drop.
+zeroize = { version = "1.9", default-features = false }
+
+[dev-dependencies]
+# TEST-ONLY: generate a self-signed server cert for the in-memory handshake.
+rcgen = "0.13"
+
+[features]
+# Production builds enable `fips` to use the FIPS 140-3 validated AWS-LC module.
+# Dev/test builds run the non-FIPS provider so they compile without the FIPS
+# build toolchain; the runtime self-check (`assert_fips`) then fails closed.
+default = []
+fips = ["rustls/fips", "aws-lc-rs/fips"]
+
+[lints]
+workspace = true
