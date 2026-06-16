@@ -9,6 +9,7 @@ use eaphost::session::{AuthResult, PeerSession, ProcessAction, SessionKind, Teap
 use supplicant::driver::DriverStep;
 use supplicant::error::DriverError;
 use teap::session::{FailReason, Outcome};
+use zeroize::Zeroizing;
 
 /// A driver that replays a scripted list of steps; once exhausted it errors, so
 /// an unexpected extra `step` call would surface as a failure rather than pass.
@@ -34,8 +35,8 @@ fn success(msk: Vec<u8>, issued_mat: Option<Vec<u8>>) -> DriverStep {
     DriverStep::Finished {
         send: None,
         outcome: Outcome::Success {
-            msk,
-            emsk: vec![0u8; 64],
+            msk: Zeroizing::new(msk),
+            emsk: Zeroizing::new(vec![0u8; 64]),
             issued_mat,
         },
     }
@@ -104,8 +105,8 @@ fn final_flight_on_finish_is_still_sendable() {
     let driver = FakeDriver::new(vec![Ok(DriverStep::Finished {
         send: Some(b"final".to_vec()),
         outcome: Outcome::Success {
-            msk: vec![0x22; 64],
-            emsk: vec![0u8; 64],
+            msk: Zeroizing::new(vec![0x22; 64]),
+            emsk: Zeroizing::new(vec![0u8; 64]),
             issued_mat: None,
         },
     })]);

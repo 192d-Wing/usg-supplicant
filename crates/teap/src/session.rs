@@ -82,20 +82,52 @@ pub enum InnerStep {
 }
 
 /// Terminal outcome of a session.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `PartialEq`/`Eq` are hand-written because the key material is wrapped in
+/// [`Zeroizing`], which is deliberately not `PartialEq`; the manual impl compares
+/// the key bytes (equality here is for tests/bookkeeping, not a secret-comparison
+/// boundary).
+#[derive(Debug, Clone)]
 pub enum Outcome {
     /// Both crypto-binding and inner auth succeeded.
     Success {
-        /// Exported MSK (64 octets) handed to `dot3svc` for port keys.
-        msk: Vec<u8>,
-        /// Exported EMSK (64 octets).
-        emsk: Vec<u8>,
+        /// Exported MSK (64 octets) handed to `dot3svc` for port keys. Scrubbed
+        /// on drop.
+        msk: Zeroizing<Vec<u8>>,
+        /// Exported EMSK (64 octets). Scrubbed on drop.
+        emsk: Zeroizing<Vec<u8>>,
         /// MAT issued by the server in this session (machine session), if any.
         issued_mat: Option<Vec<u8>>,
     },
     /// The session failed; the supplicant must deny / fail closed.
     Failure(FailReason),
 }
+
+impl PartialEq for Outcome {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (
+                Self::Success {
+                    msk,
+                    emsk,
+                    issued_mat,
+                },
+                Self::Success {
+                    msk: m2,
+                    emsk: e2,
+                    issued_mat: i2,
+                },
+            ) => {
+                msk.as_slice() == m2.as_slice()
+                    && emsk.as_slice() == e2.as_slice()
+                    && issued_mat == i2
+            }
+            (Self::Failure(a), Self::Failure(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+impl Eq for Outcome {}
 
 /// Why a session failed.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -395,8 +427,8 @@ impl TeapSession {
         Ok(Step::Done {
             send: out,
             outcome: Outcome::Success {
-                msk,
-                emsk,
+                msk: Zeroizing::new(msk),
+                emsk: Zeroizing::new(emsk),
                 issued_mat,
             },
         })
