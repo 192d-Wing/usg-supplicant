@@ -2,7 +2,7 @@
 //!
 //! Opens a system certificate store (`Local Machine\My` for the machine cert,
 //! `Current User\My` for the smartcard user cert — CAC/PIV / SIPR token certs
-//! surface there via the ActivClient / 90Meter minidrivers), selects the cert
+//! surface there via the `ActivClient` / 90Meter minidrivers), selects the cert
 //! with [`crate::selection::CertSelector`], acquires its **non-exportable**
 //! CNG key handle, and signs the TLS transcript with `NCryptSignHash`. The
 //! private key never leaves the store.
@@ -27,7 +27,6 @@ use windows::Win32::Security::Cryptography::{
     CryptAcquireCertificatePrivateKey, HCERTSTORE, NCRYPT_FLAGS, NCRYPT_KEY_HANDLE,
     NCRYPT_SILENT_FLAG, NCryptSignHash, X509_ASN_ENCODING,
 };
-use windows::core::PCWSTR;
 
 use crate::error::CredError;
 use crate::selection::CertSelector;
@@ -93,18 +92,17 @@ unsafe impl Sync for CngSigner {}
 impl Drop for CngSigner {
     fn drop(&mut self) {
         // Free the key handle only if we own it (honoring caller_free).
-        if self.caller_free_key {
-            if let Ok(handle) = self.key.lock() {
-                if handle.0 != 0 {
-                    // SAFETY: we own this NCRYPT handle (caller_free was TRUE);
-                    // free exactly once.
-                    let _ = unsafe {
-                        windows::Win32::Security::Cryptography::NCryptFreeObject(
-                            windows::Win32::Security::Cryptography::NCRYPT_HANDLE(handle.0),
-                        )
-                    };
-                }
-            }
+        if self.caller_free_key
+            && let Ok(handle) = self.key.lock()
+            && handle.0 != 0
+        {
+            // SAFETY: we own this NCRYPT handle (caller_free was TRUE);
+            // free exactly once.
+            let _ = unsafe {
+                windows::Win32::Security::Cryptography::NCryptFreeObject(
+                    windows::Win32::Security::Cryptography::NCRYPT_HANDLE(handle.0),
+                )
+            };
         }
         // Free our duplicated cert context exactly once.
         if !self.cert_ctx.is_null() {
@@ -208,9 +206,9 @@ fn acquire_key(ctx: *const CERT_CONTEXT) -> Result<(NCRYPT_KEY_HANDLE, bool), Cr
             ctx,
             flags,
             None,
-            &mut handle,
-            Some(&mut key_spec),
-            Some(&mut caller_free),
+            &raw mut handle,
+            Some(&raw mut key_spec),
+            Some(&raw mut caller_free),
         )
         .map_err(|e| CredError::StoreFailure { detail: e.code().0 })?;
     }
@@ -261,15 +259,22 @@ impl CngSigner {
         // SAFETY: handle is a live NCRYPT key; first call (None signature)
         // returns the required buffer size in `needed`.
         unsafe {
-            NCryptSignHash(handle, None, digest, None, &mut needed, flags)
+            NCryptSignHash(handle, None, digest, None, &raw mut needed, flags)
                 .map_err(|e| CredError::StoreFailure { detail: e.code().0 })?;
         }
         let mut sig = vec![0u8; needed as usize];
         let mut written: u32 = 0;
         // SAFETY: `sig` is sized to `needed`; ECDSA has no padding info.
         unsafe {
-            NCryptSignHash(handle, None, digest, Some(&mut sig), &mut written, flags)
-                .map_err(|e| CredError::StoreFailure { detail: e.code().0 })?;
+            NCryptSignHash(
+                handle,
+                None,
+                digest,
+                Some(&mut sig),
+                &raw mut written,
+                flags,
+            )
+            .map_err(|e| CredError::StoreFailure { detail: e.code().0 })?;
         }
         sig.truncate(written as usize);
         Ok(sig)
