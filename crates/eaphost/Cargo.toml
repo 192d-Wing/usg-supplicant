@@ -11,6 +11,8 @@ description = "Windows EAPHost integration for the TEAP supplicant: OS FIPS-poli
 # Platform-independent TEAP orchestration the peer-method shim drives.
 supplicant = { path = "../supplicant" }
 teap = { path = "../teap" }
+# Scrub the exported MSK held in AuthResult on drop.
+zeroize = { version = "1.9", default-features = false, features = ["alloc"] }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [

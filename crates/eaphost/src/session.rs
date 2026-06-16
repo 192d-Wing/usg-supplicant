@@ -20,6 +20,7 @@
 use supplicant::driver::DriverStep;
 use supplicant::error::DriverError;
 use teap::session::{FailReason, Outcome};
+use zeroize::Zeroizing;
 
 /// Which identity an `EAPHost` session authenticates: the machine certificate at
 /// boot (CNG) or the user smartcard certificate at logon.
@@ -66,20 +67,41 @@ pub enum ProcessAction {
 }
 
 /// The terminal authentication result handed to `EAPHost` (`EapPeerGetResult`).
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `PartialEq`/`Eq` are hand-written: the `msk` is wrapped in [`Zeroizing`]
+/// (deliberately not `PartialEq`) so it is scrubbed on drop; the manual impl
+/// compares the key bytes for test/bookkeeping use.
+#[derive(Debug, Clone)]
 pub enum AuthResult {
     /// Authentication succeeded. `msk` (64 octets) becomes the 802.1X port keys;
     /// `issued_mat` is the machine-session ticket to persist, if the server sent
     /// one.
     Success {
-        /// The exported MSK for the port keys.
-        msk: Vec<u8>,
+        /// The exported MSK for the port keys; scrubbed on drop.
+        msk: Zeroizing<Vec<u8>>,
         /// The MAT issued in this session (machine session), if any.
         issued_mat: Option<Vec<u8>>,
     },
     /// Authentication failed; the supplicant must deny.
     Failure(FailReason),
 }
+
+impl PartialEq for AuthResult {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (
+                Self::Success { msk, issued_mat },
+                Self::Success {
+                    msk: m2,
+                    issued_mat: i2,
+                },
+            ) => msk.as_slice() == m2.as_slice() && issued_mat == i2,
+            (Self::Failure(a), Self::Failure(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+impl Eq for AuthResult {}
 
 /// An `EAPHost` peer-method session over a TEAP driver.
 #[derive(Debug)]
