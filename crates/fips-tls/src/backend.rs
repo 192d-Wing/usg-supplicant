@@ -137,13 +137,19 @@ impl TeapTlsClient {
     /// # Errors
     /// [`FipsTlsError::Rustls`] on a TLS protocol error.
     pub fn feed_incoming(&mut self, records: &[u8]) -> Result<(), FipsTlsError> {
-        let mut cursor = io::Cursor::new(records);
-        loop {
+        // Feed by advancing through the slice. We must NOT call `read_tls` once
+        // the slice is exhausted: a 0-byte `read_tls` signals transport EOF to
+        // rustls, after which `reader().read` returns `UnexpectedEof`. Each
+        // `feed_incoming` is a discrete message, not a stream close.
+        let mut rest: &[u8] = records;
+        while !rest.is_empty() {
+            let mut cursor = io::Cursor::new(rest);
             let read = self.conn.read_tls(&mut cursor).map_err(io_to_rustls)?;
             if read == 0 {
                 break;
             }
             self.conn.process_new_packets()?;
+            rest = rest.get(read..).unwrap_or(&[]);
         }
         Ok(())
     }
@@ -188,7 +194,18 @@ impl TeapTlsClient {
             let read = match self.conn.reader().read(&mut chunk) {
                 Ok(0) => break,
                 Ok(n) => n,
-                Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => break,
+                // No more plaintext right now. UnexpectedEof here is a stream end
+                // without close_notify; tolerated because EAP is message-framed
+                // (each record is AEAD-protected; a missing message surfaces as a
+                // failed/absent EAP message, not silent stream truncation).
+                Err(ref e)
+                    if matches!(
+                        e.kind(),
+                        io::ErrorKind::WouldBlock | io::ErrorKind::UnexpectedEof
+                    ) =>
+                {
+                    break;
+                }
                 Err(e) => return Err(io_to_rustls(e)),
             };
             plaintext.extend_from_slice(chunk.get(..read).unwrap_or_default());
