@@ -24,6 +24,10 @@ rustls = { version = "0.23", default-features = false, features = ["std", "aws_l
 # Scrub the exported MSK held in AuthResult on drop.
 zeroize = { version = "1.9", default-features = false, features = ["alloc"] }
 
+[dev-dependencies]
+# The shared TEAP server harness, to drive a full handshake through the DLL.
+teap-test-harness = { path = "../teap-test-harness" }
+
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [
     "Win32_Foundation",

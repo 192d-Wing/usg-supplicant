@@ -277,6 +277,7 @@ dependencies = [
  "rustls",
  "supplicant",
  "teap",
+ "teap-test-harness",
  "windows",
  "zeroize",
 ]
@@ -701,6 +702,7 @@ dependencies = [
  "rcgen",
  "rustls",
  "teap",
+ "teap-test-harness",
 ]
 
 [[package]]
@@ -733,6 +735,16 @@ dependencies = [
  "sha2",
  "usg-kat",
  "zeroize",
+]
+
+[[package]]
+name = "teap-test-harness"
+version = "0.1.0"
+dependencies = [
+ "fips-tls",
+ "rcgen",
+ "rustls",
+ "teap",
 ]
 
 [[package]]
