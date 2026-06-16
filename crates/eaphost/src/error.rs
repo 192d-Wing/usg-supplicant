@@ -38,9 +38,7 @@ impl std::error::Error for EapHostError {}
 pub enum BuildError {
     /// Selecting the certificate or acquiring its key failed (CNG/smartcard).
     Credential(creds::error::CredError),
-    /// Building the TLS client config or the inner EAP-TLS method failed.
-    Tls(String),
-    /// Building the TEAP driver failed.
+    /// Assembling the driver failed (inner TLS config/method, or the driver).
     Driver(String),
 }
 
@@ -48,8 +46,7 @@ impl core::fmt::Display for BuildError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Credential(e) => write!(f, "credential selection/acquisition failed: {e}"),
-            Self::Tls(d) => write!(f, "inner TLS setup failed: {d}"),
-            Self::Driver(d) => write!(f, "driver construction failed: {d}"),
+            Self::Driver(d) => write!(f, "driver assembly failed: {d}"),
         }
     }
 }

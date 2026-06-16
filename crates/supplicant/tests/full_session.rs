@@ -23,7 +23,6 @@ use std::sync::Arc;
 use aws_lc_rs::rand::SystemRandom;
 use aws_lc_rs::signature::{ECDSA_P256_SHA256_ASN1_SIGNING, EcdsaKeyPair};
 use creds::adapter::RemoteCertResolver;
-use fips_tls::backend::client_config;
 use fips_tls::mac::AwsLcMac;
 use fips_tls::provider::fips_provider_arc;
 use fips_tls::signer::{RemoteSigner, SignerError};
@@ -31,8 +30,7 @@ use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::server::WebPkiClientVerifier;
 use rustls::version::TLS13;
 use rustls::{RootCertStore, ServerConfig, ServerConnection, SignatureScheme};
-use supplicant::driver::{DriverConfig, DriverStep, TeapDriver};
-use supplicant::inner_tls::EapTlsInner;
+use supplicant::driver::{DriverConfig, DriverStep};
 use teap::cryptobind::{self, CB_SUBTYPE_REQUEST};
 use teap::eap::{EapCode, EapPacket};
 use teap::keyschedule::{EXPORTER_LABEL_SESSION_KEY_SEED, IMSK_LEN, KeySchedule, S_IMCK_LEN};
@@ -390,23 +388,15 @@ fn full_machine_session_authenticates() {
     let server_id = gen_id(SERVER_NAME);
     let machine = gen_id("usg-machine");
 
-    // Inner method presents the machine cert via a RemoteSigner resolver.
+    // The machine cert is presented via a RemoteSigner resolver; `assemble_driver`
+    // wires the inner EAP-TLS + outer driver (the same path the eaphost shim uses).
     let signer = SoftSigner {
         chain: vec![machine.cert.clone()],
         key: EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_ASN1_SIGNING, &machine.pkcs8).unwrap(),
     };
-    let mut inner_roots = RootCertStore::empty();
-    inner_roots.add(server_id.cert.clone()).unwrap();
-    let inner_config = client_config(
-        inner_roots,
-        RemoteCertResolver::new(Arc::new(signer)).into_client_auth(),
-    )
-    .unwrap();
-    let inner = EapTlsInner::new(inner_config, SERVER_NAME, 64 * 1024).unwrap();
-
-    // Outer driver trusts the server cert (outer tunnel is server-authenticated).
-    let mut outer_roots = RootCertStore::empty();
-    outer_roots.add(server_id.cert.clone()).unwrap();
+    let client_auth = RemoteCertResolver::new(Arc::new(signer)).into_client_auth();
+    let mut roots = RootCertStore::empty();
+    roots.add(server_id.cert.clone()).unwrap();
     let cfg = DriverConfig {
         identity: Identity::Machine,
         server_name: SERVER_NAME.to_string(),
@@ -414,7 +404,7 @@ fn full_machine_session_authenticates() {
         mat_to_present: None,
         max_fragment: 64 * 1024,
     };
-    let mut driver = TeapDriver::new(cfg, outer_roots, Box::new(inner)).unwrap();
+    let mut driver = supplicant::builder::assemble_driver(cfg, roots, client_auth).unwrap();
 
     let mut server = TeapServer::new(&server_id, &machine.cert);
     let mut inbound = server.start();

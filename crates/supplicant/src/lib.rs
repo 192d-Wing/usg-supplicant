@@ -8,6 +8,7 @@
 //! smartcard user cert) is injected.
 #![forbid(unsafe_code)]
 
+pub mod builder;
 pub mod driver;
 pub mod error;
 pub mod inner_tls;
