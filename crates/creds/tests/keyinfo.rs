@@ -7,9 +7,11 @@ use creds::keyinfo::{CertKey, scheme_for_cert};
 use rcgen::{CertificateParams, KeyPair, PKCS_ECDSA_P256_SHA256, PKCS_ECDSA_P384_SHA384};
 use rustls::SignatureScheme;
 
-/// A self-signed RSA-2048 cert (public DER only). rcgen cannot generate RSA keys,
-/// so this fixture was produced once via Windows `New-SelfSignedCertificate`.
+/// Self-signed RSA cert fixtures (public DER only). rcgen cannot generate RSA
+/// keys, so these were produced once via Windows `New-SelfSignedCertificate`.
 const RSA2048_SELF_SIGNED: &[u8] = include_bytes!("fixtures/rsa2048_selfsigned.der");
+/// A sub-2048 (1024-bit) RSA cert — below the approved floor, must be rejected.
+const RSA1024_SELF_SIGNED: &[u8] = include_bytes!("fixtures/rsa1024_selfsigned.der");
 
 fn self_signed(alg: &'static rcgen::SignatureAlgorithm) -> Vec<u8> {
     let key = KeyPair::generate_for(alg).unwrap();
@@ -50,6 +52,15 @@ fn detects_rsa_as_pss() {
             scheme: SignatureScheme::RSA_PSS_SHA256,
             digest_len: 32,
         }
+    );
+}
+
+#[test]
+fn rejects_rsa_below_2048() {
+    // DESIGN.md allow-list: RSA must be >= 2048; a 1024-bit key fails closed.
+    assert_eq!(
+        scheme_for_cert(RSA1024_SELF_SIGNED),
+        Err(CredError::UnsupportedKey)
     );
 }
 

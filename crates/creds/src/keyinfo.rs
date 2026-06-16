@@ -22,6 +22,8 @@ const OID_RSA_ENCRYPTION: &str = "1.2.840.113549.1.1.1";
 const OID_P256: &str = "1.2.840.10045.3.1.7";
 /// `secp384r1` / NIST P-384.
 const OID_P384: &str = "1.3.132.0.34";
+/// Minimum approved RSA modulus size (DESIGN.md allow-list; FIPS 186-5).
+const RSA_MIN_BITS: usize = 2048;
 
 /// The signature shape derived from a certificate's public key: the TLS 1.3
 /// scheme to advertise plus the data the CNG signer needs to encode the result.
@@ -62,16 +64,27 @@ impl CertKey {
 /// RSA keys advertise **`rsa_pss_rsae_sha256`** — the SHA-256 `rsae` scheme is
 /// the most widely offered, and both ends of this protocol are ours
 /// (SERVER-CONTRACT). RSA-2048 PSS with a 32-octet salt is FIPS-approved.
+/// RSA keys below `RSA_MIN_BITS` are rejected (DESIGN.md allow-list).
 ///
 /// # Errors
 /// [`CredError::BadCertificate`] if the DER is invalid, or
-/// [`CredError::UnsupportedKey`] if the key is not ECDSA P-256/P-384 or RSA.
+/// [`CredError::UnsupportedKey`] if the key is not ECDSA P-256/P-384, not RSA,
+/// or an RSA key smaller than `RSA_MIN_BITS`.
 pub fn scheme_for_cert(cert_der: &[u8]) -> Result<CertKey, CredError> {
     let (_, cert) = X509Certificate::from_der(cert_der).map_err(|_| CredError::BadCertificate)?;
     let spki = cert.public_key();
     let key_alg = spki.algorithm.algorithm.to_id_string();
 
     if key_alg == OID_RSA_ENCRYPTION {
+        // DESIGN.md allow-list: RSA >= 2048, anything else aborts. Fail closed —
+        // a key whose size can't be determined is rejected too.
+        let bits = match spki.parsed() {
+            Ok(x509_parser::public_key::PublicKey::RSA(rsa)) => rsa.key_size(),
+            _ => return Err(CredError::UnsupportedKey),
+        };
+        if bits < RSA_MIN_BITS {
+            return Err(CredError::UnsupportedKey);
+        }
         return Ok(CertKey::RsaPss {
             scheme: SignatureScheme::RSA_PSS_SHA256,
             digest_len: 32,
