@@ -109,8 +109,7 @@ fn find_type(tlvs: &[RawTlv], t: u16) -> Option<&RawTlv> {
 #[test]
 fn machine_session_full_success_with_issued_mat() {
     let imsk = imsk();
-    let mac = RefSha384;
-    let mut inner = ScriptedInner::new(vec![
+    let inner = ScriptedInner::new(vec![
         InnerStep::Respond(b"client-hello".to_vec()),
         InnerStep::Done(imsk.clone()),
     ]);
@@ -119,7 +118,7 @@ fn machine_session_full_success_with_issued_mat() {
         mat_vendor_id: VENDOR_ID,
         mat_to_present: None,
     };
-    let mut s = TeapSession::new(cfg, &seed(), &mac, &mut inner).unwrap();
+    let mut s = TeapSession::new(cfg, &seed(), Box::new(RefSha384), Box::new(inner)).unwrap();
 
     // Msg 1: Identity-Type(Machine) + inner start -> peer responds inner.
     let step = s
@@ -186,14 +185,13 @@ fn machine_session_full_success_with_issued_mat() {
 
 #[test]
 fn user_session_presents_mat_once() {
-    let mac = RefSha384;
-    let mut inner = ScriptedInner::new(vec![InnerStep::Respond(b"ch".to_vec())]);
+    let inner = ScriptedInner::new(vec![InnerStep::Respond(b"ch".to_vec())]);
     let cfg = SessionConfig {
         identity: Identity::User,
         mat_vendor_id: VENDOR_ID,
         mat_to_present: Some(b"stored-mat".to_vec()),
     };
-    let mut s = TeapSession::new(cfg, &seed(), &mac, &mut inner).unwrap();
+    let mut s = TeapSession::new(cfg, &seed(), Box::new(RefSha384), Box::new(inner)).unwrap();
 
     let step = s
         .step(&[IdentityType::User.to_tlv(true), eap_payload(b"start")])
@@ -216,13 +214,13 @@ fn user_session_presents_mat_once() {
 
 // ---- Fail-closed paths ----
 
-fn machine_session<'a>(mac: &'a RefSha384, inner: &'a mut ScriptedInner) -> TeapSession<'a> {
+fn machine_session(inner: ScriptedInner) -> TeapSession {
     let cfg = SessionConfig {
         identity: Identity::Machine,
         mat_vendor_id: VENDOR_ID,
         mat_to_present: None,
     };
-    TeapSession::new(cfg, &seed(), mac, inner).unwrap()
+    TeapSession::new(cfg, &seed(), Box::new(RefSha384), Box::new(inner)).unwrap()
 }
 
 fn assert_fail(step: Step, want: FailReason) {
@@ -242,9 +240,8 @@ fn assert_fail(step: Step, want: FailReason) {
 
 #[test]
 fn identity_mismatch_fails_closed() {
-    let mac = RefSha384;
-    let mut inner = ScriptedInner::new(vec![]);
-    let mut s = machine_session(&mac, &mut inner);
+    let inner = ScriptedInner::new(vec![]);
+    let mut s = machine_session(inner);
     // Machine session, but server asks for User identity.
     let step = s.step(&[IdentityType::User.to_tlv(true)]).unwrap();
     assert_fail(step, FailReason::IdentityMismatch);
@@ -252,18 +249,16 @@ fn identity_mismatch_fails_closed() {
 
 #[test]
 fn inner_failure_fails_closed() {
-    let mac = RefSha384;
-    let mut inner = ScriptedInner::new(vec![InnerStep::Failed]);
-    let mut s = machine_session(&mac, &mut inner);
+    let inner = ScriptedInner::new(vec![InnerStep::Failed]);
+    let mut s = machine_session(inner);
     let step = s.step(&[eap_payload(b"start")]).unwrap();
     assert_fail(step, FailReason::InnerFailed);
 }
 
 #[test]
 fn intermediate_result_success_without_crypto_binding_fails_closed() {
-    let mac = RefSha384;
-    let mut inner = ScriptedInner::new(vec![InnerStep::Done(imsk())]);
-    let mut s = machine_session(&mac, &mut inner);
+    let inner = ScriptedInner::new(vec![InnerStep::Done(imsk())]);
+    let mut s = machine_session(inner);
     s.step(&[eap_payload(b"start")]).unwrap(); // capture IMSK
 
     // IR(Success) with NO crypto-binding.
@@ -279,9 +274,8 @@ fn intermediate_result_success_without_crypto_binding_fails_closed() {
 
 #[test]
 fn tampered_crypto_binding_fails_closed() {
-    let mac = RefSha384;
-    let mut inner = ScriptedInner::new(vec![InnerStep::Done(imsk())]);
-    let mut s = machine_session(&mac, &mut inner);
+    let inner = ScriptedInner::new(vec![InnerStep::Done(imsk())]);
+    let mut s = machine_session(inner);
     s.step(&[eap_payload(b"start")]).unwrap();
 
     // CB sealed under the WRONG key (different IMSK) -> verify must fail.
@@ -299,9 +293,8 @@ fn tampered_crypto_binding_fails_closed() {
 
 #[test]
 fn result_success_before_crypto_binding_fails_closed() {
-    let mac = RefSha384;
-    let mut inner = ScriptedInner::new(vec![]);
-    let mut s = machine_session(&mac, &mut inner);
+    let inner = ScriptedInner::new(vec![]);
+    let mut s = machine_session(inner);
     // Result(Success) with no prior inner method / crypto-binding.
     let step = s
         .step(&[ResultTlv(ResultStatus::Success).to_tlv(true)])
@@ -311,9 +304,8 @@ fn result_success_before_crypto_binding_fails_closed() {
 
 #[test]
 fn server_result_failure_fails_closed() {
-    let mac = RefSha384;
-    let mut inner = ScriptedInner::new(vec![]);
-    let mut s = machine_session(&mac, &mut inner);
+    let inner = ScriptedInner::new(vec![]);
+    let mut s = machine_session(inner);
     let step = s
         .step(&[ResultTlv(ResultStatus::Failure).to_tlv(true)])
         .unwrap();
@@ -322,9 +314,8 @@ fn server_result_failure_fails_closed() {
 
 #[test]
 fn duplicate_critical_tlv_fails_closed() {
-    let mac = RefSha384;
-    let mut inner = ScriptedInner::new(vec![]);
-    let mut s = machine_session(&mac, &mut inner);
+    let inner = ScriptedInner::new(vec![]);
+    let mut s = machine_session(inner);
     let step = s
         .step(&[
             ResultTlv(ResultStatus::Success).to_tlv(true),
@@ -336,9 +327,8 @@ fn duplicate_critical_tlv_fails_closed() {
 
 #[test]
 fn non_mandatory_critical_tlv_fails_closed() {
-    let mac = RefSha384;
-    let mut inner = ScriptedInner::new(vec![]);
-    let mut s = machine_session(&mac, &mut inner);
+    let inner = ScriptedInner::new(vec![]);
+    let mut s = machine_session(inner);
     let step = s
         .step(&[ResultTlv(ResultStatus::Success).to_tlv(false)])
         .unwrap();
@@ -347,18 +337,16 @@ fn non_mandatory_critical_tlv_fails_closed() {
 
 #[test]
 fn bad_imsk_length_fails_closed() {
-    let mac = RefSha384;
-    let mut inner = ScriptedInner::new(vec![InnerStep::Done(vec![0u8; 16])]);
-    let mut s = machine_session(&mac, &mut inner);
+    let inner = ScriptedInner::new(vec![InnerStep::Done(vec![0u8; 16])]);
+    let mut s = machine_session(inner);
     let step = s.step(&[eap_payload(b"start")]).unwrap();
     assert_fail(step, FailReason::BadImsk);
 }
 
 #[test]
 fn crypto_binding_wrong_subtype_fails_closed() {
-    let mac = RefSha384;
-    let mut inner = ScriptedInner::new(vec![InnerStep::Done(imsk())]);
-    let mut s = machine_session(&mac, &mut inner);
+    let inner = ScriptedInner::new(vec![InnerStep::Done(imsk())]);
+    let mut s = machine_session(inner);
     s.step(&[eap_payload(b"start")]).unwrap();
 
     // A correctly-MAC'd CB, but typed as a Binding RESPONSE (not Request).
@@ -378,15 +366,14 @@ fn crypto_binding_wrong_subtype_fails_closed() {
 
 #[test]
 fn user_session_does_not_capture_issued_mat() {
-    let mac = RefSha384;
     let imsk = imsk();
-    let mut inner = ScriptedInner::new(vec![InnerStep::Done(imsk.clone())]);
+    let inner = ScriptedInner::new(vec![InnerStep::Done(imsk.clone())]);
     let cfg = SessionConfig {
         identity: Identity::User,
         mat_vendor_id: VENDOR_ID,
         mat_to_present: None,
     };
-    let mut s = TeapSession::new(cfg, &seed(), &mac, &mut inner).unwrap();
+    let mut s = TeapSession::new(cfg, &seed(), Box::new(RefSha384), Box::new(inner)).unwrap();
 
     s.step(&[IdentityType::User.to_tlv(true), eap_payload(b"start")])
         .unwrap();
