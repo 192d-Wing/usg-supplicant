@@ -45,12 +45,16 @@ mod app {
         // status in its respective Windows store.
         ui.on_view_computer_cert(|| {
             if let Some(s) = read_status() {
-                crate::cert::view(usg_status::Identity::Machine, &s.machine_cert);
+                crate::cert::view(
+                    usg_status::Identity::Machine,
+                    &s.machine_cert,
+                    &s.machine_thumbprint,
+                );
             }
         });
         ui.on_view_user_cert(|| {
             if let Some(s) = read_status() {
-                crate::cert::view(usg_status::Identity::User, &s.user_cert);
+                crate::cert::view(usg_status::Identity::User, &s.user_cert, &s.user_thumbprint);
             }
         });
 

@@ -56,6 +56,11 @@ pub struct AuthStatus {
     pub machine_cert: String,
     /// Subject of the user certificate (logon/user session), or empty if none.
     pub user_cert: String,
+    /// Uppercase-hex SHA-256 thumbprint of the machine cert, so the window can open
+    /// the *exact* cert in the store (not just a subject match). Empty if unknown.
+    pub machine_thumbprint: String,
+    /// Uppercase-hex SHA-256 thumbprint of the user cert. Empty if unknown.
+    pub user_thumbprint: String,
     /// Expected EAP-server name for this session.
     pub server_name: String,
     /// Human-readable extra detail (e.g. a failure reason). May be empty.
@@ -174,12 +179,14 @@ impl AuthStatus {
     #[must_use]
     pub fn encode(&self) -> String {
         format!(
-            "version=1\nstate={}\nidentity={}\ncert_subject={}\nmachine_cert={}\nuser_cert={}\nserver_name={}\ndetail={}\nupdated_unix={}\n",
+            "version=1\nstate={}\nidentity={}\ncert_subject={}\nmachine_cert={}\nuser_cert={}\nmachine_thumbprint={}\nuser_thumbprint={}\nserver_name={}\ndetail={}\nupdated_unix={}\n",
             self.state.as_token(),
             self.identity.as_token(),
             one_line(&self.cert_subject),
             one_line(&self.machine_cert),
             one_line(&self.user_cert),
+            one_line(&self.machine_thumbprint),
+            one_line(&self.user_thumbprint),
             one_line(&self.server_name),
             one_line(&self.detail),
             self.updated_unix,
@@ -195,6 +202,8 @@ impl AuthStatus {
         let mut cert_subject = String::new();
         let mut machine_cert = String::new();
         let mut user_cert = String::new();
+        let mut machine_thumbprint = String::new();
+        let mut user_thumbprint = String::new();
         let mut server_name = String::new();
         let mut detail = String::new();
         let mut updated_unix = 0u64;
@@ -208,6 +217,8 @@ impl AuthStatus {
                 "cert_subject" => cert_subject = value.to_string(),
                 "machine_cert" => machine_cert = value.to_string(),
                 "user_cert" => user_cert = value.to_string(),
+                "machine_thumbprint" => machine_thumbprint = value.to_string(),
+                "user_thumbprint" => user_thumbprint = value.to_string(),
                 "server_name" => server_name = value.to_string(),
                 "detail" => detail = value.to_string(),
                 "updated_unix" => updated_unix = value.parse().unwrap_or(0),
@@ -220,6 +231,8 @@ impl AuthStatus {
             cert_subject,
             machine_cert,
             user_cert,
+            machine_thumbprint,
+            user_thumbprint,
             server_name,
             detail,
             updated_unix,
@@ -303,6 +316,9 @@ mod tests {
             cert_subject: "CN=host.example, OU=DoD".to_string(),
             machine_cert: "CN=host.example, OU=DoD".to_string(),
             user_cert: "CN=user.example, OU=DoD".to_string(),
+            machine_thumbprint: "AABBCCDDEEFF00112233445566778899AABBCCDDEEFF001122334455667788AA"
+                .to_string(),
+            user_thumbprint: String::new(),
             server_name: "teap.example".to_string(),
             detail: String::new(),
             updated_unix: 1_700_000_000,
@@ -348,8 +364,8 @@ mod tests {
         let mut s = sample();
         s.detail = "line1\nline2\rline3".to_string();
         let encoded = s.encode();
-        // version + 8 fields, each on one physical line.
-        assert_eq!(encoded.lines().count(), 9);
+        // version + 10 fields, each on one physical line.
+        assert_eq!(encoded.lines().count(), 11);
         assert_eq!(
             AuthStatus::decode(&encoded).unwrap().detail,
             "line1 line2 line3"

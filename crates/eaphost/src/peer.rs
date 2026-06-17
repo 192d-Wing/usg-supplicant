@@ -86,7 +86,15 @@ fn registry() -> &'static SessionRegistry<supplicant::driver::TeapDriver> {
 struct StatusMeta {
     identity: usg_status::Identity,
     cert_subject: String,
+    cert_thumbprint: String,
     server_name: String,
+}
+
+/// A credential's published identity: subject + uppercase-hex SHA-256 thumbprint.
+#[derive(Default, Clone)]
+struct CertInfo {
+    subject: String,
+    thumbprint: String,
 }
 
 fn status_meta() -> &'static Mutex<HashMap<u64, StatusMeta>> {
@@ -94,42 +102,54 @@ fn status_meta() -> &'static Mutex<HashMap<u64, StatusMeta>> {
     M.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// Last-known `(machine_cert, user_cert)` so both credentials survive across the one-
-/// at-a-time machine/user sessions. The published status file is the cross-process
-/// channel, but a transient read miss (the file is briefly locked mid-rename) must
-/// not wipe the other identity's cert, so we also remember it in-process.
-fn last_certs() -> &'static Mutex<(String, String)> {
-    static C: OnceLock<Mutex<(String, String)>> = OnceLock::new();
-    C.get_or_init(|| Mutex::new((String::new(), String::new())))
+/// Last-known `(machine, user)` credentials so both survive across the one-at-a-time
+/// machine/user sessions. The published status file is the cross-process channel, but
+/// a transient read miss (the file is briefly locked mid-rename) must not wipe the
+/// other identity's cert, so we also remember it in-process.
+fn last_certs() -> &'static Mutex<(CertInfo, CertInfo)> {
+    static C: OnceLock<Mutex<(CertInfo, CertInfo)>> = OnceLock::new();
+    C.get_or_init(|| Mutex::new((CertInfo::default(), CertInfo::default())))
 }
 
 /// Write a status snapshot for `handle` (no-op if the handle has no metadata).
 fn publish_status(handle: u64, state: usg_status::AuthState, detail: &str) {
     let map = status_meta().lock().unwrap_or_else(PoisonError::into_inner);
     if let Some(meta) = map.get(&handle) {
-        // Preserve the *other* identity's cert so the window can show both. Start from
-        // the in-process memory, then refresh from the published file's non-empty
-        // values (covers a different process publishing) — a transient read miss or a
-        // momentarily-empty field then can't wipe a cert we already know.
+        // Preserve the *other* identity's credential so the window can show both.
+        // Start from the in-process memory, then refresh from the published file's
+        // non-empty values (covers a different process publishing) — a transient read
+        // miss or a momentarily-empty field then can't wipe a cert we already know.
         let mut certs = last_certs().lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(prev) = usg_status::read_status() {
             if !prev.machine_cert.is_empty() {
-                certs.0 = prev.machine_cert;
+                certs.0.subject = prev.machine_cert;
+            }
+            if !prev.machine_thumbprint.is_empty() {
+                certs.0.thumbprint = prev.machine_thumbprint;
             }
             if !prev.user_cert.is_empty() {
-                certs.1 = prev.user_cert;
+                certs.1.subject = prev.user_cert;
+            }
+            if !prev.user_thumbprint.is_empty() {
+                certs.1.thumbprint = prev.user_thumbprint;
             }
         }
+        let active = CertInfo {
+            subject: meta.cert_subject.clone(),
+            thumbprint: meta.cert_thumbprint.clone(),
+        };
         match meta.identity {
-            usg_status::Identity::Machine => certs.0.clone_from(&meta.cert_subject),
-            usg_status::Identity::User => certs.1.clone_from(&meta.cert_subject),
+            usg_status::Identity::Machine => certs.0 = active,
+            usg_status::Identity::User => certs.1 = active,
         }
         let _ = usg_status::write_status(&usg_status::AuthStatus {
             state,
             identity: meta.identity,
             cert_subject: meta.cert_subject.clone(),
-            machine_cert: certs.0.clone(),
-            user_cert: certs.1.clone(),
+            machine_cert: certs.0.subject.clone(),
+            user_cert: certs.1.subject.clone(),
+            machine_thumbprint: certs.0.thumbprint.clone(),
+            user_thumbprint: certs.1.thumbprint.clone(),
             server_name: meta.server_name.clone(),
             detail: detail.to_string(),
             updated_unix: usg_status::unix_now(),
@@ -503,13 +523,15 @@ fn begin_session(blob: &[u8]) -> Option<u64> {
         (Identity::User, SessionKind::User)
     };
     // Capture status metadata before cfg fields are moved into the driver config.
-    let meta = StatusMeta {
+    // The cert thumbprint is filled once the cert is selected in `build_driver`.
+    let mut meta = StatusMeta {
         identity: if cfg.machine {
             usg_status::Identity::Machine
         } else {
             usg_status::Identity::User
         },
         cert_subject: cfg.selector_subject.clone(),
+        cert_thumbprint: String::new(),
         server_name: cfg.server_name.clone(),
     };
     let mut roots = RootCertStore::empty();
@@ -528,7 +550,8 @@ fn begin_session(blob: &[u8]) -> Option<u64> {
         mat_to_present: cfg.mat,
         max_fragment: cfg.max_fragment as usize,
     };
-    let driver = build_driver(driver_cfg, roots, &selector).ok()?;
+    let (driver, thumbprint) = build_driver(driver_cfg, roots, &selector).ok()?;
+    meta.cert_thumbprint = thumbprint;
     let handle = registry().begin(PeerSession::new(kind, driver));
     status_meta()
         .lock()
