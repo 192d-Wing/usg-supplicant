@@ -19,6 +19,11 @@ usg-status = { path = "../usg-status" }
 # gating keeps the non-Windows CI legs from compiling the GUI stack.
 [target.'cfg(windows)'.dependencies]
 slint = "1"
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Security_Cryptography",
+    "Win32_UI_Shell",
+] }
 
 [target.'cfg(windows)'.build-dependencies]
 slint-build = "1"

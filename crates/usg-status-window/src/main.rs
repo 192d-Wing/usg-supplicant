@@ -13,6 +13,9 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 #[cfg(windows)]
+mod cert;
+
+#[cfg(windows)]
 mod app {
     use std::path::PathBuf;
     use std::time::Duration;
@@ -32,6 +35,13 @@ mod app {
             ui.set_seal(img);
         }
         apply(&ui, read_status().as_ref());
+
+        // "View Certificate…": open the in-use cert from the current published status.
+        ui.on_view_certificate(|| {
+            if let Some(s) = read_status() {
+                crate::cert::view(s.identity, &s.cert_subject);
+            }
+        });
 
         // Refresh on a timer; the closure holds only a weak handle so it can't keep
         // the window alive after close.
@@ -62,6 +72,7 @@ mod app {
             }
             ui.set_detail("".into());
             ui.set_indicator(0);
+            ui.set_has_cert(false);
             return;
         };
         let (outer, inner) = s.state.outer_inner();
@@ -74,6 +85,7 @@ mod app {
         ui.set_detail(s.detail.clone().into());
         ui.set_updated(updated_label(s.updated_unix).into());
         ui.set_indicator(indicator(s.state));
+        ui.set_has_cert(!s.cert_subject.is_empty());
     }
 
     /// 0 idle/unknown · 1 in-progress · 2 authenticated · 3 failed — matches the

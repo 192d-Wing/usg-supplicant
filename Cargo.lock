@@ -5317,6 +5317,7 @@ dependencies = [
  "slint",
  "slint-build",
  "usg-status",
+ "windows 0.62.2",
 ]
 
 [[package]]

@@ -1,4 +1,4 @@
-import { Spinner } from "std-widgets.slint";
+import { Spinner, Button } from "std-widgets.slint";
 
 // One "Label: value" detail row.
 component Field inherits Rectangle {
@@ -30,7 +30,7 @@ component Field inherits Rectangle {
 export component MainWindow inherits Window {
     title: "USG Supplicant — Authentication Status";
     width: 520px;
-    height: 360px;
+    height: 420px;
     background: #355e93;
     icon: root.seal;
 
@@ -46,6 +46,11 @@ export component MainWindow inherits Window {
     in property <string> updated: "—";
     // 0 idle/unknown · 1 in-progress · 2 authenticated · 3 failed
     in property <int> indicator: 0;
+    // Whether a certificate is available to open in the Windows viewer.
+    in property <bool> has-cert: false;
+
+    // Fired by the "View Certificate…" button.
+    callback view-certificate();
 
     VerticalLayout {
         padding: 24px;
@@ -109,10 +114,37 @@ export component MainWindow inherits Window {
             Field { label: "Session"; value: root.session; }
             Field { label: "Outer (TEAP tunnel)"; value: root.outer; }
             Field { label: "Inner (EAP-TLS)"; value: root.inner; }
-            Field { label: "Certificate"; value: root.certificate; }
+            // Certificate: full distinguished name, wrapped.
+            VerticalLayout {
+                spacing: 2px;
+                Text {
+                    text: "Certificate:";
+                    color: #c2d4ea;
+                    font-size: 13px;
+                }
+                Text {
+                    text: root.certificate;
+                    color: white;
+                    font-size: 13px;
+                    font-weight: 600;
+                    wrap: word-wrap;
+                }
+            }
             Field { label: "Server"; value: root.server; }
             Field { label: "Updated"; value: root.updated; }
             if root.detail != "": Field { label: "Detail"; value: root.detail; }
+        }
+
+        // Actions.
+        HorizontalLayout {
+            alignment: end;
+            Button {
+                text: "View Certificate…";
+                enabled: root.has-cert;
+                clicked => {
+                    root.view-certificate();
+                }
+            }
         }
     }
 }
