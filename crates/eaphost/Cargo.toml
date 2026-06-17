@@ -40,6 +40,10 @@ windows = { version = "0.62", features = [
     "Win32_System_LibraryLoader",
     # LocalAlloc for EapPeerGetIdentity's identity string (EAPHost LocalFrees it).
     "Win32_System_Memory",
+    # IXMLDOMDocument2 + CoCreateInstance for the EapPeerConfigXml2Blob/Blob2Xml
+    # config-DLL entry points (the EAPHost connection-profile round-trip).
+    "Win32_Data_Xml_MsXml",
+    "Win32_System_Com",
 ] }
 
 # Mirrors the security baseline; `unsafe` is permitted (Win32 FFI) but confined
