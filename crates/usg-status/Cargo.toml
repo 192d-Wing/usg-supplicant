@@ -1,0 +1,12 @@
+[package]
+name = "usg-status"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Shared authentication-status model + file codec linking the usg-supplicant EAPHost peer method (writer, runs as Local System) to the user-session status tray (reader)."
+publish = false
+
+[lints]
+workspace = true
