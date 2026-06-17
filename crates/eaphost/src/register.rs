@@ -21,12 +21,7 @@ use windows::core::PCWSTR;
 use crate::EAPHOST_METHODS_KEY;
 use crate::error::EapHostError;
 
-/// Our `EAPHost` Author ID — distinct from Microsoft's so we never collide with
-/// the in-box TEAP method. Set to the organization's IANA Private Enterprise
-/// Number before production.
-pub const USG_AUTHOR_ID: u32 = 192_000;
-/// EAP type 55 (TEAP).
-pub const USG_TYPE_ID: u32 = 55;
+pub use crate::{USG_AUTHOR_ID, USG_TYPE_ID};
 /// Friendly name shown for the method.
 const FRIENDLY_NAME: &str = "usg-TEAP/1.3";
 

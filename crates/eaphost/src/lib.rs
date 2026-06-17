@@ -45,6 +45,8 @@ pub mod os_fips;
 /// The `EAPHost` peer-method C-ABI exports (the DLL `dot3svc` loads).
 #[cfg(windows)]
 pub mod peer;
+/// Build the `EapHostConfig` / `dot3svc` LAN profile XML for provisioning.
+pub mod profile;
 /// Register / unregister the peer method in the Windows registry.
 #[cfg(windows)]
 pub mod register;
@@ -53,3 +55,10 @@ pub mod session_registry;
 
 /// Registry location under which an `EAPHost` peer method is registered.
 pub const EAPHOST_METHODS_KEY: &str = r"SYSTEM\CurrentControlSet\Services\EapHost\Methods";
+
+/// Our `EAPHost` Author ID — distinct from Microsoft's so we never collide with
+/// the in-box TEAP method. Set to the organization's IANA Private Enterprise
+/// Number before production. (Also re-exported from [`register`].)
+pub const USG_AUTHOR_ID: u32 = 192_000;
+/// EAP type 55 (TEAP). (Also re-exported from [`register`].)
+pub const USG_TYPE_ID: u32 = 55;
