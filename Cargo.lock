@@ -278,6 +278,7 @@ dependencies = [
  "supplicant",
  "teap",
  "teap-test-harness",
+ "usg-status",
  "windows",
  "zeroize",
 ]

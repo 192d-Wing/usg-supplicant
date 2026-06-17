@@ -29,6 +29,9 @@ impl TeapStep for FakeDriver {
             .pop_front()
             .unwrap_or(Err(DriverError::Protocol("fake exhausted")))
     }
+    fn tunnel_established(&self) -> bool {
+        false
+    }
 }
 
 fn success(msk: Vec<u8>, issued_mat: Option<Vec<u8>>) -> DriverStep {

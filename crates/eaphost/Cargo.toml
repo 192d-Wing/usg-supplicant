@@ -29,6 +29,8 @@ zeroize = { version = "1.9", default-features = false, features = ["alloc"] }
 teap-test-harness = { path = "../teap-test-harness" }
 
 [target.'cfg(windows)'.dependencies]
+# Publish auth status (state, identity, cert subject) for the status tray.
+usg-status = { path = "../usg-status" }
 windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_System_Registry",

@@ -24,7 +24,8 @@
 )]
 
 use core::ffi::c_void;
-use std::sync::OnceLock;
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock, PoisonError};
 
 use windows::Win32::Data::Xml::MsXml::{DOMDocument60, IXMLDOMDocument2};
 use windows::Win32::Foundation::{ERROR_NOT_SUPPORTED, ERROR_SUCCESS, HANDLE, HLOCAL, LocalFree};
@@ -74,6 +75,47 @@ const ANONYMOUS_IDENTITY: &str = "anonymous";
 fn registry() -> &'static SessionRegistry<supplicant::driver::TeapDriver> {
     static REG: OnceLock<SessionRegistry<supplicant::driver::TeapDriver>> = OnceLock::new();
     REG.get_or_init(SessionRegistry::new)
+}
+
+// --- Status publishing for the user-session tray (usg-status) ---------------
+// The method runs as Local System; it publishes a coarse auth status (state,
+// identity, cert subject, server) to a ProgramData file the tray polls. Failures
+// to write are ignored — status is best-effort and never affects authentication.
+
+/// Per-handle metadata the status snapshots need but `PeerSession` doesn't hold.
+struct StatusMeta {
+    identity: usg_status::Identity,
+    cert_subject: String,
+    server_name: String,
+}
+
+fn status_meta() -> &'static Mutex<HashMap<u64, StatusMeta>> {
+    static M: OnceLock<Mutex<HashMap<u64, StatusMeta>>> = OnceLock::new();
+    M.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Write a status snapshot for `handle` (no-op if the handle has no metadata).
+fn publish_status(handle: u64, state: usg_status::AuthState, detail: &str) {
+    let map = status_meta().lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some(meta) = map.get(&handle) {
+        let _ = usg_status::write_status(&usg_status::AuthStatus {
+            state,
+            identity: meta.identity,
+            cert_subject: meta.cert_subject.clone(),
+            server_name: meta.server_name.clone(),
+            detail: detail.to_string(),
+            updated_unix: usg_status::unix_now(),
+        });
+    }
+}
+
+/// Map a terminal [`AuthResult`] to a tray status + detail string.
+fn terminal_status(result: Option<&AuthResult>) -> (usg_status::AuthState, String) {
+    match result {
+        Some(AuthResult::Success { .. }) => (usg_status::AuthState::Authenticated, String::new()),
+        Some(AuthResult::Failure(reason)) => (usg_status::AuthState::Failed, format!("{reason:?}")),
+        None => (usg_status::AuthState::Failed, "no result".to_string()),
+    }
 }
 
 /// Carry a registry handle in an `EAP_SESSION_HANDLE` (`VOID*`), and back.
@@ -432,6 +474,16 @@ fn begin_session(blob: &[u8]) -> Option<u64> {
     } else {
         (Identity::User, SessionKind::User)
     };
+    // Capture status metadata before cfg fields are moved into the driver config.
+    let meta = StatusMeta {
+        identity: if cfg.machine {
+            usg_status::Identity::Machine
+        } else {
+            usg_status::Identity::User
+        },
+        cert_subject: cfg.selector_subject.clone(),
+        server_name: cfg.server_name.clone(),
+    };
     let mut roots = RootCertStore::empty();
     for der in cfg.roots {
         roots.add(CertificateDer::from(der)).ok()?;
@@ -449,7 +501,13 @@ fn begin_session(blob: &[u8]) -> Option<u64> {
         max_fragment: cfg.max_fragment as usize,
     };
     let driver = build_driver(driver_cfg, roots, &selector).ok()?;
-    Some(registry().begin(PeerSession::new(kind, driver)))
+    let handle = registry().begin(PeerSession::new(kind, driver));
+    status_meta()
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .insert(handle, meta);
+    publish_status(handle, usg_status::AuthState::Connecting, "");
+    Some(handle)
 }
 
 extern "system" fn EapPeerProcessRequestPacket(
@@ -468,9 +526,26 @@ extern "system" fn EapPeerProcessRequestPacket(
     let eap = unsafe {
         core::slice::from_raw_parts(p_receive_packet.cast::<u8>(), cb_receive_packet as usize)
     };
-    let Some(action) = registry().process(ptr_to_handle(session_handle), eap) else {
+    let handle = ptr_to_handle(session_handle);
+    let Some(action) = registry().process(handle, eap) else {
         return E_FAIL; // unknown handle -> fail closed
     };
+    // Publish the new phase for the tray: outer handshaking, the inner EAP-TLS
+    // once the tunnel is up, or the terminal verdict.
+    match action {
+        ProcessAction::Respond => {
+            let state = if registry().tunnel_established(handle) == Some(true) {
+                usg_status::AuthState::InnerInProgress
+            } else {
+                usg_status::AuthState::Connecting
+            };
+            publish_status(handle, state, "");
+        }
+        ProcessAction::Finished => {
+            let (state, detail) = terminal_status(registry().result(handle).as_ref());
+            publish_status(handle, state, &detail);
+        }
+    }
     let response_action = match action {
         ProcessAction::Respond => EapPeerMethodResponseActionSend,
         ProcessAction::Finished => EapPeerMethodResponseActionResult,
@@ -521,10 +596,11 @@ extern "system" fn EapPeerGetResult(
     if p_result.is_null() {
         return E_FAIL;
     }
-    let success = matches!(
-        registry().result(ptr_to_handle(session_handle)),
-        Some(AuthResult::Success { .. })
-    );
+    let handle = ptr_to_handle(session_handle);
+    let result = registry().result(handle);
+    let success = matches!(result, Some(AuthResult::Success { .. }));
+    let (state, detail) = terminal_status(result.as_ref());
+    publish_status(handle, state, &detail);
     // SAFETY: p_result is the caller's writable result struct.
     // TODO(§4.1): deliver the MSK to EAPHost via EapPeerGetResponseAttributes
     // (MS-MPPE keys) for the 802.1X port keys.
@@ -540,7 +616,14 @@ extern "system" fn EapPeerEndSession(
     pp_eap_error: *mut *mut EAP_ERROR,
 ) -> u32 {
     unsafe { clear_error(pp_eap_error) };
-    registry().end(ptr_to_handle(session_handle));
+    let handle = ptr_to_handle(session_handle);
+    registry().end(handle);
+    // Drop the status metadata; the last published snapshot (terminal verdict)
+    // stays on disk for the tray to keep showing until a new session starts.
+    status_meta()
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .remove(&handle);
     ERROR_SUCCESS.0
 }
 
