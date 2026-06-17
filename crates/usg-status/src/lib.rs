@@ -48,8 +48,14 @@ pub struct AuthStatus {
     pub state: AuthState,
     /// Machine vs user session.
     pub identity: Identity,
-    /// Subject (or selector) of the client certificate in use.
+    /// Subject (or selector) of the client certificate in use for the *active*
+    /// session (equals [`Self::machine_cert`] or [`Self::user_cert`]).
     pub cert_subject: String,
+    /// Subject of the machine certificate (boot/machine session), or empty if none
+    /// has been seen. Lets the window show both credentials at once.
+    pub machine_cert: String,
+    /// Subject of the user certificate (logon/user session), or empty if none.
+    pub user_cert: String,
     /// Expected EAP-server name for this session.
     pub server_name: String,
     /// Human-readable extra detail (e.g. a failure reason). May be empty.
@@ -96,6 +102,31 @@ impl AuthState {
             Self::Failed => "Authentication failed",
         }
     }
+
+    /// Short bold headline for a toast / window title line.
+    #[must_use]
+    pub fn headline(self) -> &'static str {
+        match self {
+            Self::Authenticated => "Authenticated",
+            Self::Failed => "Authentication failed",
+            Self::Idle => "usg-TEAP",
+            Self::Connecting | Self::OuterEstablished | Self::InnerInProgress => "Authenticating…",
+        }
+    }
+
+    /// `(outer, inner)` phase words derived from the coarse state, for the two-line
+    /// outer-tunnel / inner-EAP summary shown in the menu, toast, and window.
+    #[must_use]
+    pub fn outer_inner(self) -> (&'static str, &'static str) {
+        match self {
+            Self::Idle => ("—", "—"),
+            Self::Connecting => ("In progress", "Waiting"),
+            Self::OuterEstablished => ("Established", "Waiting"),
+            Self::InnerInProgress => ("Established", "In progress"),
+            Self::Authenticated => ("Established", "Authenticated"),
+            Self::Failed => ("See detail", "See detail"),
+        }
+    }
 }
 
 impl Identity {
@@ -115,6 +146,21 @@ impl Identity {
             _ => None,
         }
     }
+
+    /// "Machine" / "User" label for the session identity.
+    #[must_use]
+    pub fn display_name(self) -> &'static str {
+        match self {
+            Self::Machine => "Machine",
+            Self::User => "User",
+        }
+    }
+}
+
+/// `v`, or an em dash when it's empty — for rendering possibly-empty status fields.
+#[must_use]
+pub fn dash(v: &str) -> &str {
+    if v.is_empty() { "—" } else { v }
 }
 
 fn one_line(s: &str) -> String {
@@ -128,10 +174,12 @@ impl AuthStatus {
     #[must_use]
     pub fn encode(&self) -> String {
         format!(
-            "version=1\nstate={}\nidentity={}\ncert_subject={}\nserver_name={}\ndetail={}\nupdated_unix={}\n",
+            "version=1\nstate={}\nidentity={}\ncert_subject={}\nmachine_cert={}\nuser_cert={}\nserver_name={}\ndetail={}\nupdated_unix={}\n",
             self.state.as_token(),
             self.identity.as_token(),
             one_line(&self.cert_subject),
+            one_line(&self.machine_cert),
+            one_line(&self.user_cert),
             one_line(&self.server_name),
             one_line(&self.detail),
             self.updated_unix,
@@ -145,6 +193,8 @@ impl AuthStatus {
         let mut state = None;
         let mut identity = None;
         let mut cert_subject = String::new();
+        let mut machine_cert = String::new();
+        let mut user_cert = String::new();
         let mut server_name = String::new();
         let mut detail = String::new();
         let mut updated_unix = 0u64;
@@ -156,6 +206,8 @@ impl AuthStatus {
                 "state" => state = AuthState::from_token(value),
                 "identity" => identity = Identity::from_token(value),
                 "cert_subject" => cert_subject = value.to_string(),
+                "machine_cert" => machine_cert = value.to_string(),
+                "user_cert" => user_cert = value.to_string(),
                 "server_name" => server_name = value.to_string(),
                 "detail" => detail = value.to_string(),
                 "updated_unix" => updated_unix = value.parse().unwrap_or(0),
@@ -166,6 +218,8 @@ impl AuthStatus {
             state: state?,
             identity: identity?,
             cert_subject,
+            machine_cert,
+            user_cert,
             server_name,
             detail,
             updated_unix,
@@ -247,6 +301,8 @@ mod tests {
             state: AuthState::InnerInProgress,
             identity: Identity::Machine,
             cert_subject: "CN=host.example, OU=DoD".to_string(),
+            machine_cert: "CN=host.example, OU=DoD".to_string(),
+            user_cert: "CN=user.example, OU=DoD".to_string(),
             server_name: "teap.example".to_string(),
             detail: String::new(),
             updated_unix: 1_700_000_000,
@@ -276,12 +332,24 @@ mod tests {
     }
 
     #[test]
+    fn presentation_helpers() {
+        assert_eq!(Identity::Machine.display_name(), "Machine");
+        assert_eq!(AuthState::Authenticated.headline(), "Authenticated");
+        assert_eq!(
+            AuthState::InnerInProgress.outer_inner(),
+            ("Established", "In progress")
+        );
+        assert_eq!(dash(""), "—");
+        assert_eq!(dash("CN=host"), "CN=host");
+    }
+
+    #[test]
     fn newlines_in_values_are_flattened() {
         let mut s = sample();
         s.detail = "line1\nline2\rline3".to_string();
         let encoded = s.encode();
-        // version + 6 fields, each on one physical line.
-        assert_eq!(encoded.lines().count(), 7);
+        // version + 8 fields, each on one physical line.
+        assert_eq!(encoded.lines().count(), 9);
         assert_eq!(
             AuthStatus::decode(&encoded).unwrap().detail,
             "line1 line2 line3"

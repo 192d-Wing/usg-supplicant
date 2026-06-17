@@ -18,8 +18,7 @@ use windows::Win32::Graphics::Gdi::{
     HDC, InvalidateRect, PAINTSTRUCT, SRCCOPY, SelectObject, SetBkMode, SetTextColor, TRANSPARENT,
 };
 use windows::Win32::Graphics::GdiPlus::{
-    GdipCreateFromHDC, GdipDeleteGraphics, GdipDrawImageRectI, GdipSetSmoothingMode, GpGraphics,
-    SmoothingModeAntiAlias,
+    GdipCreateFromHDC, GdipDeleteGraphics, GdipSetSmoothingMode, GpGraphics, SmoothingModeAntiAlias,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -202,7 +201,7 @@ fn paint(hwnd: HWND) {
         // Text block.
         SetBkMode(mem, TRANSPARENT);
         let _ = SetTextColor(mem, COLORREF(0x00FF_FFFF));
-        draw_line(mem, headline(state), 104, 16);
+        draw_line(mem, state.headline(), 104, 16);
         let _ = SetTextColor(mem, COLORREF(0x00C8_C8C8));
         for (i, line) in detail_lines(status.as_ref()).iter().enumerate() {
             draw_line(mem, line, 104, 44 + 20 * i32::try_from(i).unwrap_or(0));
@@ -212,11 +211,8 @@ fn paint(hwnd: HWND) {
         let mut g: *mut GpGraphics = std::ptr::null_mut();
         if GdipCreateFromHDC(mem, &mut g).0 == 0 {
             let _ = GdipSetSmoothingMode(g, SmoothingModeAntiAlias);
-            let seal = crate::gfx::seal();
-            if seal.is_null() {
+            if !crate::gfx::draw_seal(g, 14, 14, 76) {
                 crate::gfx::draw_indicator(g, AuthState::Idle, 0, 14, 14, 76); // placeholder disc
-            } else {
-                let _ = GdipDrawImageRectI(g, seal, 14, 14, 76, 76);
             }
             crate::gfx::draw_indicator(g, state, frame, W - 52, 18, 30);
             let _ = GdipDeleteGraphics(g);
@@ -230,15 +226,6 @@ fn paint(hwnd: HWND) {
     }
 }
 
-fn headline(state: AuthState) -> &'static str {
-    match state {
-        AuthState::Authenticated => "Authenticated",
-        AuthState::Failed => "Authentication failed",
-        AuthState::Idle => "usg-TEAP",
-        _ => "Authenticating…",
-    }
-}
-
 fn detail_lines(status: Option<&AuthStatus>) -> Vec<String> {
     let Some(s) = status else {
         return vec!["No active session".to_string()];
@@ -246,8 +233,8 @@ fn detail_lines(status: Option<&AuthStatus>) -> Vec<String> {
     vec![
         format!(
             "{} · {}",
-            crate::text::identity_label(s.identity),
-            crate::text::dash(&s.cert_subject)
+            s.identity.display_name(),
+            usg_status::dash(&s.cert_subject)
         ),
         format!("Server: {}", s.server_name),
     ]

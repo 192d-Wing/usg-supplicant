@@ -1,0 +1,33 @@
+[package]
+name = "usg-status-window"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Modern (Slint) status window for the usg-supplicant: shows the live outer/inner authentication state, the client certificate, and the DoD seal. Launched by the tray."
+publish = false
+
+[[bin]]
+name = "usg-status-window"
+path = "src/main.rs"
+
+[dependencies]
+usg-status = { path = "../usg-status" }
+
+# Slint and its renderer are only needed on Windows (the tray launches this there);
+# gating keeps the non-Windows CI legs from compiling the GUI stack.
+[target.'cfg(windows)'.dependencies]
+slint = "1"
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Security_Cryptography",
+    "Win32_UI_Shell",
+] }
+
+[target.'cfg(windows)'.build-dependencies]
+slint-build = "1"
+
+# GUI tool: the strict FIPS-library lint baseline does not apply.
+[lints.clippy]
+all = { level = "warn", priority = -1 }

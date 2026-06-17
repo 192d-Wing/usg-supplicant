@@ -11,22 +11,29 @@ use windows::Win32::UI::Shell::{
     Shell_NotifyIconW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow,
-    DispatchMessageW, GetCursorPos, GetMessageW, HICON, HWND_MESSAGE, IDI_APPLICATION, IDI_ERROR,
-    IDI_INFORMATION, IDI_WARNING, LoadIconW, MF_GRAYED, MF_SEPARATOR, MF_STRING, MSG,
-    PostQuitMessage, RegisterClassW, SetForegroundWindow, SetTimer, TPM_BOTTOMALIGN,
-    TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP,
-    WM_COMMAND, WM_DESTROY, WM_LBUTTONUP, WM_RBUTTONUP, WM_TIMER, WNDCLASSW,
+    AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyIcon, DestroyMenu,
+    DestroyWindow, DispatchMessageW, GetCursorPos, GetMessageW, HICON, HWND_MESSAGE,
+    IDI_APPLICATION, LoadIconW, MF_GRAYED, MF_SEPARATOR, MF_STRING, MSG, PostQuitMessage,
+    RegisterClassW, SetForegroundWindow, SetTimer, TPM_BOTTOMALIGN, TPM_RIGHTBUTTON,
+    TrackPopupMenu, TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_COMMAND,
+    WM_DESTROY, WM_LBUTTONUP, WM_RBUTTONUP, WM_TIMER, WNDCLASSW,
 };
 use windows::core::{PCWSTR, w};
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
+use std::path::PathBuf;
+use std::process::{Child, Command};
 
-use usg_status::{AuthState, AuthStatus, read_status};
+use usg_status::{AuthState, AuthStatus, dash, read_status};
 
 thread_local! {
     /// The last published state we showed, to fire a toast only on changes.
     static LAST_STATE: RefCell<Option<AuthState>> = const { RefCell::new(None) };
+    /// The spawned status-window process, so repeated clicks don't open duplicates.
+    static STATUS_WIN: RefCell<Option<Child>> = const { RefCell::new(None) };
+    /// The current generated tray icon + the state it represents, so we rebuild it
+    /// only on a state change and can `DestroyIcon` the previous one (no GDI leak).
+    static CURRENT_ICON: Cell<Option<(Option<AuthState>, HICON)>> = const { Cell::new(None) };
 }
 
 /// Tray-icon callback message (`uCallbackMessage`).
@@ -71,11 +78,14 @@ pub fn run() {
             return;
         };
 
+        // Start GDI+ (and load the seal) BEFORE building the first icon: the tray
+        // icon is drawn with GDI+, so it must be initialized or the first icon fails
+        // to render and a stock-icon fallback gets cached for that state.
+        crate::gfx::startup();
         let mut nid = base_nid(hwnd);
         let status = read_status();
         refresh(&mut nid, status.as_ref());
         let _ = Shell_NotifyIconW(NIM_ADD, &nid);
-        crate::gfx::startup();
         // Seed the last-seen state so a stale persisted status (e.g. yesterday's
         // result) doesn't pop a toast on startup — only genuine in-session changes do.
         LAST_STATE.with(|l| *l.borrow_mut() = status.as_ref().map(|s| s.state));
@@ -93,6 +103,7 @@ pub fn run() {
                 }
             }
         }
+        destroy_current_icon();
         crate::gfx::shutdown();
     }
 }
@@ -124,17 +135,49 @@ fn set_tip(nid: &mut NOTIFYICONDATAW, tip: &str) {
     }
 }
 
+/// The lock-and-key tray icon for `state`, colored by phase. Rebuilt only when the
+/// state changes; the prior icon is destroyed once the new one is in hand.
 fn icon_for(state: Option<AuthState>) -> HICON {
-    let id = match state {
-        Some(AuthState::Authenticated) => IDI_INFORMATION,
-        Some(AuthState::Failed) => IDI_ERROR,
-        Some(AuthState::Connecting | AuthState::OuterEstablished | AuthState::InnerInProgress) => {
-            IDI_WARNING
+    CURRENT_ICON.with(|c| {
+        if let Some((cached, icon)) = c.get() {
+            if cached == state {
+                return icon;
+            }
+            let next = build_icon(state);
+            // The shell copied the old icon on a prior NIM_MODIFY, so it's safe to free.
+            // SAFETY: `icon` was created by `GdipCreateHICONFromBitmap` (owned).
+            unsafe {
+                let _ = DestroyIcon(icon);
+            }
+            c.set(Some((state, next)));
+            next
+        } else {
+            let next = build_icon(state);
+            c.set(Some((state, next)));
+            next
         }
-        _ => IDI_APPLICATION,
-    };
-    // SAFETY: loading a shared stock icon (no module handle).
-    unsafe { LoadIconW(None, id) }.unwrap_or_default()
+    })
+}
+
+/// Generate the icon, falling back to a stock application icon if GDI+ drawing fails.
+fn build_icon(state: Option<AuthState>) -> HICON {
+    let icon = crate::gfx::make_tray_icon(state.unwrap_or(AuthState::Idle));
+    if icon.0.is_null() {
+        // SAFETY: loading a shared stock icon (no module handle).
+        unsafe { LoadIconW(None, IDI_APPLICATION) }.unwrap_or_default()
+    } else {
+        icon
+    }
+}
+
+/// Destroy the generated tray icon on shutdown.
+fn destroy_current_icon() {
+    if let Some((_, icon)) = CURRENT_ICON.with(Cell::take) {
+        // SAFETY: a handle we own from `build_icon`; harmless if it's the stock fallback.
+        unsafe {
+            let _ = DestroyIcon(icon);
+        }
+    }
 }
 
 fn tooltip(status: Option<&AuthStatus>) -> String {
@@ -143,7 +186,7 @@ fn tooltip(status: Option<&AuthStatus>) -> String {
         Some(s) => format!(
             "usg-TEAP — {} ({})",
             s.state.label(),
-            crate::text::identity_label(s.identity)
+            s.identity.display_name()
         ),
     }
 }
@@ -153,13 +196,13 @@ fn menu_lines(status: Option<&AuthStatus>) -> Vec<String> {
     let Some(s) = status else {
         return vec!["No authentication status yet".to_string()];
     };
-    let (outer, inner) = crate::text::outer_inner(s.state);
+    let (outer, inner) = s.state.outer_inner();
     let mut lines = vec![
-        format!("Session: {}", crate::text::identity_label(s.identity)),
+        format!("Session: {}", s.identity.display_name()),
         format!("Outer (TEAP tunnel): {outer}"),
         format!("Inner (EAP-TLS): {inner}"),
-        format!("Certificate: {}", crate::text::dash(&s.cert_subject)),
-        format!("Server: {}", crate::text::dash(&s.server_name)),
+        format!("Certificate: {}", dash(&s.cert_subject)),
+        format!("Server: {}", dash(&s.server_name)),
     ];
     if !s.detail.is_empty() {
         lines.push(format!("Detail: {}", s.detail));
@@ -169,6 +212,33 @@ fn menu_lines(status: Option<&AuthStatus>) -> Vec<String> {
 
 fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+/// Open the modern (Slint) status window — a separate process, since Slint runs its
+/// own event loop and can't share this tray's Win32 message loop. If a window we
+/// launched is still open, leave it alone instead of spawning a duplicate.
+fn open_status_window() {
+    STATUS_WIN.with(|c| {
+        let mut slot = c.borrow_mut();
+        if let Some(child) = slot.as_mut() {
+            match child.try_wait() {
+                Ok(None) => return, // still running — don't open a second one
+                _ => *slot = None,  // exited or errored — fall through and respawn
+            }
+        }
+        if let Some(path) = status_window_path()
+            && let Ok(child) = Command::new(path).spawn()
+        {
+            *slot = Some(child);
+        }
+    });
+}
+
+/// Path to `usg-status-window.exe`, expected alongside the tray executable.
+fn status_window_path() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let cand = exe.parent()?.join("usg-status-window.exe");
+    cand.is_file().then_some(cand)
 }
 
 /// Build and show the right-click status menu at the cursor.
@@ -242,7 +312,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         }
         WM_COMMAND => {
             match wparam.0 & 0xFFFF {
-                ID_STATUS => crate::window::open(),
+                ID_STATUS => open_status_window(),
                 ID_EXIT => {
                     let _ = Shell_NotifyIconW(NIM_DELETE, &base_nid(hwnd));
                     let _ = DestroyWindow(hwnd);
