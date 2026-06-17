@@ -43,7 +43,10 @@ use windows::Win32::System::Com::{
 };
 use windows::core::{BSTR, GUID, Interface};
 
-/// Serialize the process-global method registration across this file's tests.
+/// Serialize this binary's tests, which share the one HKLM method registration.
+/// This lock only covers *this* test binary; the `real_eaphost` binary registers
+/// the same author/type key, so run these `#[ignore]`d suites one `--test` binary
+/// at a time, not via a blanket `--ignored` across binaries.
 static REG_LOCK: Mutex<()> = Mutex::new(());
 
 fn dll_path() -> String {
