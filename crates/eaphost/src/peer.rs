@@ -26,12 +26,16 @@
 use core::ffi::c_void;
 use std::sync::OnceLock;
 
-use windows::Win32::Foundation::{ERROR_NOT_SUPPORTED, ERROR_SUCCESS, HANDLE};
+use windows::Win32::Data::Xml::MsXml::{DOMDocument60, IXMLDOMDocument2};
+use windows::Win32::Foundation::{ERROR_NOT_SUPPORTED, ERROR_SUCCESS, HANDLE, HLOCAL, LocalFree};
 use windows::Win32::Security::ExtensibleAuthenticationProtocol::{
     EAP_ERROR, EAP_METHOD_PROPERTY_ARRAY, EAP_METHOD_TYPE, EAP_PEER_METHOD_ROUTINES, EAP_TYPE,
     EapCredential, EapPacket, EapPeerMethodOutput, EapPeerMethodResponseActionResult,
     EapPeerMethodResponseActionSend, EapPeerMethodResult, EapPeerMethodResultReason,
 };
+use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
+use windows::Win32::System::Memory::{LMEM_FIXED, LMEM_ZEROINIT, LocalAlloc};
+use windows::core::{BSTR, Interface};
 
 use creds::selection::CertSelector;
 use rustls::RootCertStore;
@@ -222,14 +226,138 @@ pub unsafe extern "system" fn EapPeerGetConfigBlobAndUserBlob(
     ERROR_SUCCESS.0
 }
 
-/// Free memory previously returned by a configuration API. We never allocate via
-/// those APIs (every blob/property set is empty), so this is a no-op.
+/// Free memory previously returned by a configuration API — currently the blob
+/// from `EapPeerConfigXml2Blob`. Those allocations use `LocalAlloc`, so free with
+/// `LocalFree`; a null pointer is ignored.
 ///
 /// # Safety
-/// FFI export called by `EAPHost`. The argument is ignored — this method hands
-/// out no configuration-API allocations for `EAPHost` to free here.
+/// FFI export called by `EAPHost`. `p_ui_context_data` must be null or a pointer
+/// this method returned from a configuration API (hence `LocalAlloc`-owned).
 #[unsafe(no_mangle)]
-pub unsafe extern "system" fn EapPeerFreeMemory(_p_ui_context_data: *mut c_void) {}
+pub unsafe extern "system" fn EapPeerFreeMemory(p_ui_context_data: *mut c_void) {
+    if !p_ui_context_data.is_null() {
+        // SAFETY: the only config-API memory we hand out is LocalAlloc-allocated.
+        let _ = unsafe { LocalFree(Some(HLOCAL(p_ui_context_data))) };
+    }
+}
+
+/// Convert our connection blob into the XML config `EAPHost` stores in a
+/// connection profile (`<UsgTeapConfigBlob>HEX</…>`), returned as a fresh
+/// `IXMLDOMDocument2`. This is the half the host-API `EapHostPeerConfigXml2Blob`
+/// path needs so `EAPHost` can wrap our method config in a connection-data
+/// structure it can parse.
+///
+/// # Safety
+/// FFI export called by `EAPHost`. `p_config_in`/`dw_size_of_config_in` describe a
+/// readable blob (or null/0); `pp_config_doc` receives an owned `IXMLDOMDocument2`
+/// the caller releases; `pp_eap_error` (if non-null) is writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn EapPeerConfigBlob2Xml(
+    _dw_flags: u32,
+    _eap_method_type: EAP_METHOD_TYPE,
+    p_config_in: *const u8,
+    dw_size_of_config_in: u32,
+    pp_config_doc: *mut *mut c_void,
+    pp_eap_error: *mut *mut EAP_ERROR,
+) -> u32 {
+    unsafe { clear_error(pp_eap_error) };
+    if pp_config_doc.is_null() {
+        return E_FAIL;
+    }
+    unsafe { *pp_config_doc = core::ptr::null_mut() };
+    let blob: &[u8] = if p_config_in.is_null() || dw_size_of_config_in == 0 {
+        &[]
+    } else {
+        // SAFETY: caller-promised readable region of `dw_size_of_config_in` bytes.
+        unsafe { core::slice::from_raw_parts(p_config_in, dw_size_of_config_in as usize) }
+    };
+    let xml = crate::config_xml::blob_to_xml(blob);
+    match build_xml_doc(&xml) {
+        Some(doc) => {
+            // Transfer the COM reference to the caller.
+            unsafe { *pp_config_doc = doc.into_raw() };
+            ERROR_SUCCESS.0
+        }
+        None => E_FAIL,
+    }
+}
+
+/// Build an `IXMLDOMDocument2` from an XML string via MSXML. Returns `None` on a
+/// COM-creation or parse failure.
+fn build_xml_doc(xml: &str) -> Option<IXMLDOMDocument2> {
+    // SAFETY: standard MSXML COM creation; the BSTR outlives the `loadXML` call.
+    unsafe {
+        let doc: IXMLDOMDocument2 =
+            CoCreateInstance(&DOMDocument60, None, CLSCTX_INPROC_SERVER).ok()?;
+        if doc.loadXML(&BSTR::from(xml)).ok()?.as_bool() {
+            Some(doc)
+        } else {
+            None
+        }
+    }
+}
+
+/// Convert the XML config `EAPHost` holds for our method back into our connection
+/// blob (the inverse of `EapPeerConfigBlob2Xml`).
+///
+/// # Safety
+/// FFI export called by `EAPHost`. `p_config_doc` is a borrowed `IXMLDOMDocument2`;
+/// `pp_config_out`/`pdw_size_of_config_out` are writable out-params; the returned
+/// blob is `LocalAlloc`-owned and freed by `EAPHost` via `EapPeerFreeMemory`.
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn EapPeerConfigXml2Blob(
+    _dw_flags: u32,
+    _eap_method_type: EAP_METHOD_TYPE,
+    p_config_doc: *mut c_void,
+    pp_config_out: *mut *mut u8,
+    pdw_size_of_config_out: *mut u32,
+    pp_eap_error: *mut *mut EAP_ERROR,
+) -> u32 {
+    unsafe { clear_error(pp_eap_error) };
+    if pp_config_out.is_null() || pdw_size_of_config_out.is_null() {
+        return E_FAIL;
+    }
+    unsafe {
+        *pp_config_out = core::ptr::null_mut();
+        *pdw_size_of_config_out = 0;
+    }
+    // Borrow the document without taking ownership (EAPHost owns it).
+    let Some(doc) = (unsafe { IXMLDOMDocument2::from_raw_borrowed(&p_config_doc) }) else {
+        return E_FAIL;
+    };
+    // SAFETY: borrowed COM call; `text()` returns the document's text content.
+    let Ok(text) = (unsafe { doc.text() }) else {
+        return E_FAIL;
+    };
+    let Some(blob) = crate::config_xml::xml_text_to_blob(&text.to_string()) else {
+        return E_FAIL;
+    };
+    let Ok(len) = u32::try_from(blob.len()) else {
+        return E_FAIL;
+    };
+    let Some(p) = local_alloc_bytes(&blob) else {
+        return E_FAIL;
+    };
+    unsafe {
+        *pp_config_out = p;
+        *pdw_size_of_config_out = len;
+    }
+    ERROR_SUCCESS.0
+}
+
+/// Copy `bytes` into a fresh `LocalAlloc` buffer — the allocator `EAPHost` frees
+/// config-API memory with (via [`EapPeerFreeMemory`]). Returns the buffer, or
+/// `None` on allocation failure.
+fn local_alloc_bytes(bytes: &[u8]) -> Option<*mut u8> {
+    // SAFETY: fixed allocation of exactly `bytes.len()`; we copy that many bytes.
+    let h = unsafe { LocalAlloc(LMEM_FIXED, bytes.len()) }.ok()?;
+    let p = h.0.cast::<u8>();
+    if p.is_null() {
+        return None;
+    }
+    unsafe { core::ptr::copy_nonoverlapping(bytes.as_ptr(), p, bytes.len()) };
+    Some(p)
+}
 
 /// Per-DLL initialization. Gates on the OS FIPS policy and fails closed when the
 /// host is not in FIPS mode (DESIGN §3 — the CNG/smartcard signing half of the
@@ -461,7 +589,6 @@ pub unsafe extern "system" fn EapPeerGetIdentity(
 /// `EAPHost` frees method-returned strings with (`LocalFree`). Returns the buffer,
 /// or `None` on overflow or allocation failure.
 fn local_alloc_wide(s: &str) -> Option<*mut u16> {
-    use windows::Win32::System::Memory::{LMEM_FIXED, LMEM_ZEROINIT, LocalAlloc};
     let utf16: Vec<u16> = s.encode_utf16().chain(core::iter::once(0)).collect();
     let bytes = utf16.len().checked_mul(size_of::<u16>())?;
     // SAFETY: LMEM_ZEROINIT zero-fills `bytes`; we then copy exactly `utf16.len()`

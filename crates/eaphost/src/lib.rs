@@ -38,6 +38,8 @@
 #[cfg(windows)]
 pub mod builder;
 pub mod config;
+/// The XML envelope our `EAPHost` config DLL entry points round-trip.
+pub mod config_xml;
 pub mod error;
 pub mod os_fips;
 /// The `EAPHost` peer-method C-ABI exports (the DLL `dot3svc` loads).
