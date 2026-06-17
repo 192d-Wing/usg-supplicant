@@ -20,7 +20,7 @@ zeroize = { version = "1.9", default-features = false }
 
 [dev-dependencies]
 # TEST-ONLY: generate a self-signed server cert for the in-memory handshake.
-rcgen = "0.13"
+rcgen = "0.14"
 
 [features]
 # Production builds enable `fips` to use the FIPS 140-3 validated AWS-LC module.

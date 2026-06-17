@@ -12,7 +12,7 @@ publish = false
 fips-tls = { path = "../fips-tls" }
 teap = { path = "../teap" }
 rustls = { version = "0.23", default-features = false, features = ["std", "aws_lc_rs"] }
-rcgen = "0.13"
+rcgen = "0.14"
 
 # Test-support code: the strict production lint baseline does not apply.
 [lints.clippy]
