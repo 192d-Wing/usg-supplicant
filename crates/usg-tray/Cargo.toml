@@ -21,8 +21,10 @@ windows = { version = "0.62", features = [
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_Shell",
     "Win32_System_LibraryLoader",
-    # WNDCLASSW / RegisterClassW pull in GDI handle types (HICON/HCURSOR/HBRUSH).
+    # WNDCLASSW / RegisterClassW pull in GDI handle types (HICON/HCURSOR/HBRUSH);
+    # GDI text + brushes paint the toast card, GDI+ draws the seal + status ring.
     "Win32_Graphics_Gdi",
+    "Win32_Graphics_GdiPlus",
 ] }
 
 # GUI tool: Win32 FFI needs `unsafe`, and the strict FIPS-library lint baseline

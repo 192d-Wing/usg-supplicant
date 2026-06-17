@@ -20,7 +20,14 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{PCWSTR, w};
 
+use std::cell::RefCell;
+
 use usg_status::{AuthState, AuthStatus, Identity, read_status};
+
+thread_local! {
+    /// The last published state we showed, to fire a toast only on changes.
+    static LAST_STATE: RefCell<Option<AuthState>> = const { RefCell::new(None) };
+}
 
 /// Tray-icon callback message (`uCallbackMessage`).
 const WM_TRAY: u32 = WM_APP + 1;
@@ -65,6 +72,7 @@ pub fn run() {
         let mut nid = base_nid(hwnd);
         refresh(&mut nid);
         let _ = Shell_NotifyIconW(NIM_ADD, &nid);
+        crate::toast::startup();
         SetTimer(Some(hwnd), TIMER_ID, POLL_MS, None);
 
         let mut msg = MSG::default();
@@ -79,6 +87,7 @@ pub fn run() {
                 }
             }
         }
+        crate::toast::shutdown();
     }
 }
 
@@ -229,6 +238,17 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             let mut nid = base_nid(hwnd);
             refresh(&mut nid);
             let _ = Shell_NotifyIconW(NIM_MODIFY, &nid);
+            // Pop a toast when the published state changes.
+            let cur = read_status().map(|s| s.state);
+            LAST_STATE.with(|l| {
+                let mut last = l.borrow_mut();
+                if *last != cur {
+                    if let Some(state) = cur {
+                        crate::toast::notify(state);
+                    }
+                    *last = cur;
+                }
+            });
             LRESULT(0)
         }
         WM_COMMAND => {

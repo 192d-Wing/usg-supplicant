@@ -8,6 +8,8 @@
 #![cfg_attr(not(windows), allow(dead_code))]
 
 #[cfg(windows)]
+mod toast;
+#[cfg(windows)]
 mod tray;
 
 fn main() {
