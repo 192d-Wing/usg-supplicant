@@ -239,17 +239,12 @@ fn detail_lines(status: Option<&AuthStatus>) -> Vec<String> {
     let Some(s) = status else {
         return vec!["No active session".to_string()];
     };
-    let id = match s.identity {
-        usg_status::Identity::Machine => "Machine",
-        usg_status::Identity::User => "User",
-    };
-    let cert = if s.cert_subject.is_empty() {
-        "—"
-    } else {
-        &s.cert_subject
-    };
     vec![
-        format!("{id} · {cert}"),
+        format!(
+            "{} · {}",
+            crate::text::identity_label(s.identity),
+            crate::text::dash(&s.cert_subject)
+        ),
         format!("Server: {}", s.server_name),
     ]
 }

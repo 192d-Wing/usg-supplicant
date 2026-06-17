@@ -25,7 +25,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::w;
 
-use usg_status::{AuthState, AuthStatus, Identity, read_status, unix_now};
+use usg_status::{AuthState, AuthStatus, read_status, unix_now};
 
 const W: i32 = 470;
 const H: i32 = 330;
@@ -181,39 +181,23 @@ fn headline(state: AuthState) -> &'static str {
     }
 }
 
-fn outer_inner(state: AuthState) -> (&'static str, &'static str) {
-    match state {
-        AuthState::Idle => ("—", "—"),
-        AuthState::Connecting => ("in progress", "waiting"),
-        AuthState::OuterEstablished => ("established", "waiting"),
-        AuthState::InnerInProgress => ("established", "in progress"),
-        AuthState::Authenticated => ("established", "authenticated"),
-        AuthState::Failed => ("see detail", "see detail"),
-    }
-}
-
 fn fields(status: Option<&AuthStatus>) -> Vec<(&'static str, String)> {
     let Some(s) = status else {
         return vec![("Status", "No published authentication status".to_string())];
     };
-    let id = match s.identity {
-        Identity::Machine => "Machine",
-        Identity::User => "User",
-    };
-    let (outer, inner) = outer_inner(s.state);
-    let dash = |v: &str| {
-        if v.is_empty() {
-            "—".to_string()
-        } else {
-            v.to_string()
-        }
-    };
+    let (outer, inner) = crate::text::outer_inner(s.state);
     let mut out = vec![
-        ("Session", id.to_string()),
+        (
+            "Session",
+            crate::text::identity_label(s.identity).to_string(),
+        ),
         ("Outer (TEAP tunnel)", outer.to_string()),
         ("Inner (EAP-TLS)", inner.to_string()),
-        ("Certificate", dash(&s.cert_subject)),
-        ("Server", dash(&s.server_name)),
+        (
+            "Certificate",
+            crate::text::dash(&s.cert_subject).to_string(),
+        ),
+        ("Server", crate::text::dash(&s.server_name).to_string()),
         (
             "Updated",
             format!("{}s ago", unix_now().saturating_sub(s.updated_unix)),

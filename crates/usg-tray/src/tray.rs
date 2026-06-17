@@ -22,7 +22,7 @@ use windows::core::{PCWSTR, w};
 
 use std::cell::RefCell;
 
-use usg_status::{AuthState, AuthStatus, Identity, read_status};
+use usg_status::{AuthState, AuthStatus, read_status};
 
 thread_local! {
     /// The last published state we showed, to fire a toast only on changes.
@@ -137,32 +137,13 @@ fn icon_for(state: Option<AuthState>) -> HICON {
     unsafe { LoadIconW(None, id) }.unwrap_or_default()
 }
 
-fn identity_label(identity: Identity) -> &'static str {
-    match identity {
-        Identity::Machine => "Machine",
-        Identity::User => "User",
-    }
-}
-
-/// `(outer, inner)` status words derived from the coarse state.
-fn outer_inner(state: AuthState) -> (&'static str, &'static str) {
-    match state {
-        AuthState::Idle => ("—", "—"),
-        AuthState::Connecting => ("in progress", "waiting"),
-        AuthState::OuterEstablished => ("established", "waiting"),
-        AuthState::InnerInProgress => ("established", "in progress"),
-        AuthState::Authenticated => ("established", "authenticated"),
-        AuthState::Failed => ("see detail", "see detail"),
-    }
-}
-
 fn tooltip(status: Option<&AuthStatus>) -> String {
     match status {
         None => "usg-TEAP: no status yet".to_string(),
         Some(s) => format!(
             "usg-TEAP — {} ({})",
             s.state.label(),
-            identity_label(s.identity)
+            crate::text::identity_label(s.identity)
         ),
     }
 }
@@ -172,20 +153,13 @@ fn menu_lines(status: Option<&AuthStatus>) -> Vec<String> {
     let Some(s) = status else {
         return vec!["No authentication status yet".to_string()];
     };
-    let (outer, inner) = outer_inner(s.state);
-    let dash = |v: &str| {
-        if v.is_empty() {
-            "—".to_string()
-        } else {
-            v.to_string()
-        }
-    };
+    let (outer, inner) = crate::text::outer_inner(s.state);
     let mut lines = vec![
-        format!("Session: {}", identity_label(s.identity)),
+        format!("Session: {}", crate::text::identity_label(s.identity)),
         format!("Outer (TEAP tunnel): {outer}"),
         format!("Inner (EAP-TLS): {inner}"),
-        format!("Certificate: {}", dash(&s.cert_subject)),
-        format!("Server: {}", dash(&s.server_name)),
+        format!("Certificate: {}", crate::text::dash(&s.cert_subject)),
+        format!("Server: {}", crate::text::dash(&s.server_name)),
     ];
     if !s.detail.is_empty() {
         lines.push(format!("Detail: {}", s.detail));
