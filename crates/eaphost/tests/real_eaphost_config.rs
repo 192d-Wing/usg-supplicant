@@ -35,6 +35,7 @@
 use std::sync::Mutex;
 
 use eaphost::config::SessionConfigBlob;
+use eaphost::profile::eap_host_config_xml;
 use eaphost::register::{USG_AUTHOR_ID, USG_TYPE_ID, register, unregister};
 use windows::Win32::Data::Xml::MsXml::{DOMDocument60, IXMLDOMDocument2, IXMLDOMNode};
 use windows::Win32::Foundation::HANDLE;
@@ -72,34 +73,6 @@ fn usg_eap_method_type() -> EAP_METHOD_TYPE {
         },
         dwAuthorId: USG_AUTHOR_ID,
     }
-}
-
-fn hex(bytes: &[u8]) -> String {
-    use core::fmt::Write as _;
-    let mut s = String::new();
-    for b in bytes {
-        let _ = write!(s, "{b:02x}");
-    }
-    s
-}
-
-/// Author the `EapHostConfig` profile XML naming our method and embedding our
-/// connection blob (hex) in `<Config>`. `EAPHost` parses `<EapMethod>` to locate
-/// us and hands the `<Config>` subtree to our `EapPeerConfigXml2Blob`.
-fn eaphost_config_xml(blob: &[u8]) -> String {
-    const COMMON: &str = "http://www.microsoft.com/provisioning/EapCommon";
-    format!(
-        "<EapHostConfig xmlns=\"http://www.microsoft.com/provisioning/EapHostConfig\">\
-           <EapMethod>\
-             <Type xmlns=\"{COMMON}\">{USG_TYPE_ID}</Type>\
-             <VendorId xmlns=\"{COMMON}\">0</VendorId>\
-             <VendorType xmlns=\"{COMMON}\">0</VendorType>\
-             <AuthorId xmlns=\"{COMMON}\">{USG_AUTHOR_ID}</AuthorId>\
-           </EapMethod>\
-           <Config><UsgTeapConfigBlob>{}</UsgTeapConfigBlob></Config>\
-         </EapHostConfig>",
-        hex(blob)
-    )
 }
 
 /// Parse `xml` into an MSXML document node.
@@ -158,7 +131,7 @@ unsafe fn host_config_to_blob(xml: &str) -> Result<(Vec<u8>, EAP_METHOD_TYPE), S
 /// The host config pipeline + live session, returning the connection-blob length
 /// and the begun session id. Always ends the session before returning.
 fn run_profile_pipeline(inner_blob: &[u8]) -> Result<(usize, u32), String> {
-    let xml = eaphost_config_xml(inner_blob);
+    let xml = eap_host_config_xml(inner_blob);
     // SAFETY: COM is initialized for this thread by the caller.
     let (conn_blob, method) = unsafe { host_config_to_blob(&xml) }?;
     if method.dwAuthorId != USG_AUTHOR_ID || u32::from(method.eapType.r#type) != USG_TYPE_ID {

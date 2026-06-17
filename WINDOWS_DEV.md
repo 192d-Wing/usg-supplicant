@@ -177,6 +177,44 @@ user session presents it. End-to-end this needs:
 (smartcard inner cert + MAT present/capture) mirrors it; the logic already
 exists. Worth adding before on-hardware work.
 
+### 4.6 Production validation via `dot3svc` (wired 802.1X)
+The manual `EapHostPeer*` harness (`tests/real_eaphost*.rs`) validates the method
+end to end **up to the outer EAP identity**: it authenticates a full TEAP session
+self-hosted, runs inside the real `EAPHost` service (load + `BeginSession` + FIPS
+gate), and round-trips the connection profile through `EapHostPeerConfigXml2Blob`.
+The one thing it can't drive is the EAP-Response/Identity: on-hardware testing
+showed `EAPHost` never calls our `EapPeerGetIdentity` and a manual session aborts
+the Identity round with `EAP_E_EAPHOST_IDENTITY_UNKNOWN`, because the production
+supplicant — Windows' Wired `AutoConfig` (`dot3svc`) — performs the identity and
+credential plumbing (machine context, profile, connection-id registration) that a
+hand-rolled `EapHostPeer*` caller does not. So the remaining validation is to let
+`dot3svc` drive the method on a real 802.1X link.
+
+**Supplicant side (this repo provides):**
+
+- `eaphost::profile::eap_host_config_xml(blob)` — the `EapHostConfig` selecting our
+  method and embedding the `SessionConfigBlob`.
+- `eaphost::profile::lan_profile_xml(blob)` — a `dot3svc` LAN profile (OneX, machine
+  auth) wrapping it. Install with `netsh lan add profile filename=<f> interface=<if>`.
+- `eaphost::register::register(dll_path)` — the HKLM method registration.
+
+**Provisioning + run (elevated):**
+
+1. `sc.exe config dot3svc start= auto && net start dot3svc` (Wired AutoConfig).
+2. Register the method (deploy `eaphost.dll`, then `register()`), copy the DLL to a
+   stable path, **not** a `usg-eaphost-testN.dll` scratch name.
+3. Write `lan_profile_xml(blob)` to a file; `netsh lan add profile filename=… interface="<adapter>"`.
+4. Enable 802.1X on that interface; on link-up `dot3svc` initiates EAPOL and drives
+   our method. Watch via `netsh lan show interfaces` and the EAPHost event log /
+   `netsh trace start scenario=Wired ...`.
+
+**Authenticator side (lab infrastructure, not in this repo):** an 802.1X
+authenticator that relays EAPOL to a RADIUS server speaking the `usg-TEAP/1.3`
+server contract — e.g. `hostapd` (`driver=wired`) or a managed switch in front of
+`usg-radius`. Do **not** test on the host's primary corporate NIC (it may already
+do 802.1X and you can disrupt connectivity) — use an isolated segment (a VM bridged
+to a host-only/internal virtual switch).
+
 ---
 
 ## 5. Pinned facts the implementation depends on (don't drift)
