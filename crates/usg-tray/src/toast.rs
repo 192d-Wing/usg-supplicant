@@ -14,8 +14,9 @@ use std::path::PathBuf;
 
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, CreateSolidBrush, DT_END_ELLIPSIS, DT_LEFT, DT_SINGLELINE, DeleteObject, DrawTextW,
-    EndPaint, FillRect, HDC, InvalidateRect, PAINTSTRUCT, SetBkMode, SetTextColor, TRANSPARENT,
+    BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateSolidBrush,
+    DT_END_ELLIPSIS, DT_LEFT, DT_SINGLELINE, DeleteDC, DeleteObject, DrawTextW, EndPaint, FillRect,
+    HDC, InvalidateRect, PAINTSTRUCT, SRCCOPY, SelectObject, SetBkMode, SetTextColor, TRANSPARENT,
 };
 use windows::Win32::Graphics::GdiPlus::{
     GdipCreateBitmapFromFile, GdipCreateFromHDC, GdipCreatePen1, GdipCreateSolidFill,
@@ -216,6 +217,7 @@ unsafe extern "system" fn toast_proc(
         }
         WM_TIMER => {
             let mut hide = false;
+            let mut animate = false;
             CTX.with(|c| {
                 if let Some(ctx) = c.borrow_mut().as_mut() {
                     ctx.frame = ctx.frame.wrapping_add(1);
@@ -224,6 +226,7 @@ unsafe extern "system" fn toast_proc(
                         ctx.state,
                         AuthState::Authenticated | AuthState::Failed | AuthState::Idle
                     );
+                    animate = !terminal; // only the spinner needs per-tick repaints
                     if terminal && ctx.ticks > AUTO_HIDE_TICKS {
                         hide = true;
                     }
@@ -232,7 +235,7 @@ unsafe extern "system" fn toast_proc(
             if hide {
                 let _ = KillTimer(Some(hwnd), ANIM_TIMER);
                 let _ = ShowWindow(hwnd, SW_HIDE);
-            } else {
+            } else if animate {
                 let _ = InvalidateRect(Some(hwnd), None, false);
             }
             LRESULT(0)
@@ -250,30 +253,36 @@ fn paint(hwnd: HWND) {
             })
     });
     let status = read_status();
-    // SAFETY: standard BeginPaint/EndPaint with GDI + GDI+ drawing on the DC.
+    // SAFETY: BeginPaint, then draw to an off-screen buffer and blit it once, so
+    // the per-tick spinner repaint doesn't flicker.
     unsafe {
         let mut ps = PAINTSTRUCT::default();
         let hdc = BeginPaint(hwnd, &mut ps);
         let mut rc = RECT::default();
         let _ = GetClientRect(hwnd, &mut rc);
+        let (cw, ch) = (rc.right, rc.bottom);
+
+        let mem = CreateCompatibleDC(Some(hdc));
+        let bmp = CreateCompatibleBitmap(hdc, cw, ch);
+        let old = SelectObject(mem, bmp.into());
 
         // Card background #355e93 (COLORREF is 0x00BBGGRR).
         let bg = CreateSolidBrush(COLORREF(0x0093_5E35));
-        FillRect(hdc, &rc, bg);
+        FillRect(mem, &rc, bg);
         let _ = DeleteObject(bg.into());
 
         // Text block.
-        SetBkMode(hdc, TRANSPARENT);
-        let _ = SetTextColor(hdc, COLORREF(0x00FF_FFFF));
-        draw_line(hdc, headline(state), 104, 16);
-        let _ = SetTextColor(hdc, COLORREF(0x00C8_C8C8));
+        SetBkMode(mem, TRANSPARENT);
+        let _ = SetTextColor(mem, COLORREF(0x00FF_FFFF));
+        draw_line(mem, headline(state), 104, 16);
+        let _ = SetTextColor(mem, COLORREF(0x00C8_C8C8));
         for (i, line) in detail_lines(status.as_ref()).iter().enumerate() {
-            draw_line(hdc, line, 104, 44 + 20 * i32::try_from(i).unwrap_or(0));
+            draw_line(mem, line, 104, 44 + 20 * i32::try_from(i).unwrap_or(0));
         }
 
         // Seal + indicator via GDI+.
         let mut g: *mut GpGraphics = std::ptr::null_mut();
-        if GdipCreateFromHDC(hdc, &mut g).0 == 0 {
+        if GdipCreateFromHDC(mem, &mut g).0 == 0 {
             let _ = GdipSetSmoothingMode(g, SmoothingModeAntiAlias);
             if seal.is_null() {
                 fill_circle(g, 0xFF37_4A8B, 14, 14, 76); // placeholder disc
@@ -283,6 +292,11 @@ fn paint(hwnd: HWND) {
             draw_indicator(g, state, frame, W - 52, 18, 30);
             let _ = GdipDeleteGraphics(g);
         }
+
+        let _ = BitBlt(hdc, 0, 0, cw, ch, Some(mem), 0, 0, SRCCOPY);
+        SelectObject(mem, old);
+        let _ = DeleteObject(bmp.into());
+        let _ = DeleteDC(mem);
         let _ = EndPaint(hwnd, &ps);
     }
 }

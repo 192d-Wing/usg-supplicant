@@ -229,8 +229,15 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
     match msg {
         WM_TRAY => {
             let event = (lparam.0 as u32) & 0xFFFF;
-            if event == WM_LBUTTONUP || event == WM_RBUTTONUP {
-                show_menu(hwnd);
+            match event {
+                // Left-click: pop the status toast with the current state.
+                WM_LBUTTONUP => {
+                    let state = read_status().map_or(AuthState::Idle, |s| s.state);
+                    crate::toast::notify(state);
+                }
+                // Right-click: the text status menu.
+                WM_RBUTTONUP => show_menu(hwnd),
+                _ => {}
             }
             LRESULT(0)
         }
