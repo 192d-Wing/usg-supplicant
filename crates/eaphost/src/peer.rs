@@ -117,6 +117,9 @@ fn last_certs() -> &'static Mutex<(CertInfo, CertInfo)> {
 }
 
 /// Write a status snapshot for `handle` (no-op if the handle has no metadata).
+///
+/// Lock order: `status_meta` then `last_certs` (never the reverse), so the two
+/// process-global mutexes can't deadlock.
 fn publish_status(handle: u64, state: usg_status::AuthState, detail: &str) {
     let map = status_meta().lock().unwrap_or_else(PoisonError::into_inner);
     if let Some(meta) = map.get(&handle) {
@@ -548,6 +551,12 @@ fn begin_session(blob: &[u8]) -> Option<u64> {
     let mut roots = RootCertStore::empty();
     for der in cfg.roots {
         roots.add(CertificateDer::from(der)).ok()?;
+    }
+    // Reject a profile with no trust anchors explicitly: an empty store can never
+    // verify the EAP server, so fail closed here with a clear cause rather than
+    // letting it surface later as an opaque TLS handshake error.
+    if roots.is_empty() {
+        return None;
     }
     let selector = CertSelector {
         require_client_auth_eku: true,
