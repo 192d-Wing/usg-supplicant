@@ -115,6 +115,12 @@ fn last_certs() -> &'static Mutex<(CertInfo, CertInfo)> {
 fn publish_status(handle: u64, state: usg_status::AuthState, detail: &str) {
     let map = status_meta().lock().unwrap_or_else(PoisonError::into_inner);
     if let Some(meta) = map.get(&handle) {
+        // Refuse to publish unless the %ProgramData% status directory is locked down
+        // to SYSTEM/Admins (status assessment H1/M1) — better no status than status
+        // a low-priv user could pre-create, poison, or redirect via a reparse point.
+        if !crate::status_security::secure_status_dir() {
+            return;
+        }
         // Preserve the *other* identity's credential so the window can show both.
         // Start from the in-process memory, then refresh from the published file's
         // non-empty values (covers a different process publishing) — a transient read

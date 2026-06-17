@@ -52,6 +52,9 @@ pub mod profile;
 pub mod register;
 pub mod session;
 pub mod session_registry;
+/// Harden the `%ProgramData%` status directory's ACL (Local-System writer).
+#[cfg(windows)]
+mod status_security;
 
 /// Registry location under which an `EAPHost` peer method is registered.
 pub const EAPHOST_METHODS_KEY: &str = r"SYSTEM\CurrentControlSet\Services\EapHost\Methods";
