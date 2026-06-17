@@ -1,0 +1,31 @@
+[package]
+name = "usg-tray"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "System-tray status indicator for the usg-supplicant: polls the published auth status and shows the outer/inner TEAP state and client certificate via a tray icon + menu."
+publish = false
+
+[[bin]]
+name = "usg-tray"
+path = "src/main.rs"
+
+[dependencies]
+usg-status = { path = "../usg-status" }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Shell",
+    "Win32_System_LibraryLoader",
+    # WNDCLASSW / RegisterClassW pull in GDI handle types (HICON/HCURSOR/HBRUSH).
+    "Win32_Graphics_Gdi",
+] }
+
+# GUI tool: Win32 FFI needs `unsafe`, and the strict FIPS-library lint baseline
+# does not apply. Basic clippy hygiene only.
+[lints.clippy]
+all = { level = "warn", priority = -1 }

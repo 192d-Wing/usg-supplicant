@@ -848,6 +848,14 @@ name = "usg-status"
 version = "0.1.0"
 
 [[package]]
+name = "usg-tray"
+version = "0.1.0"
+dependencies = [
+ "usg-status",
+ "windows",
+]
+
+[[package]]
 name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
