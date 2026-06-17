@@ -37,8 +37,9 @@ const W: i32 = 360;
 const H: i32 = 104;
 const ANIM_TIMER: usize = 7;
 const ANIM_MS: u32 = 60;
-/// Hide a terminal toast after this many animation ticks (~5s at 60 ms).
-const AUTO_HIDE_TICKS: u32 = 83;
+/// Auto-dismiss any toast after this many ticks (~8s at 60 ms), including an
+/// in-progress one (the tray icon + status window remain the live indicators).
+const AUTO_HIDE_TICKS: u32 = 8_000 / ANIM_MS;
 
 /// Per-thread toast state (the message loop and toast live on one thread).
 struct Ctx {
@@ -148,12 +149,15 @@ unsafe extern "system" fn toast_proc(
                 if let Some(ctx) = c.borrow_mut().as_mut() {
                     ctx.frame = ctx.frame.wrapping_add(1);
                     ctx.ticks = ctx.ticks.saturating_add(1);
-                    let terminal = matches!(
+                    // Only in-progress states animate (the spinner); every toast
+                    // auto-dismisses after the timeout.
+                    animate = matches!(
                         ctx.state,
-                        AuthState::Authenticated | AuthState::Failed | AuthState::Idle
+                        AuthState::Connecting
+                            | AuthState::OuterEstablished
+                            | AuthState::InnerInProgress
                     );
-                    animate = !terminal; // only the spinner needs per-tick repaints
-                    if terminal && ctx.ticks > AUTO_HIDE_TICKS {
+                    if ctx.ticks > AUTO_HIDE_TICKS {
                         hide = true;
                     }
                 }
