@@ -11,16 +11,16 @@ use windows::Win32::UI::Shell::{
     Shell_NotifyIconW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow,
-    DispatchMessageW, GetCursorPos, GetMessageW, HICON, HWND_MESSAGE, IDI_APPLICATION, IDI_ERROR,
-    IDI_INFORMATION, IDI_WARNING, LoadIconW, MF_GRAYED, MF_SEPARATOR, MF_STRING, MSG,
-    PostQuitMessage, RegisterClassW, SetForegroundWindow, SetTimer, TPM_BOTTOMALIGN,
-    TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP,
-    WM_COMMAND, WM_DESTROY, WM_LBUTTONUP, WM_RBUTTONUP, WM_TIMER, WNDCLASSW,
+    AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyIcon, DestroyMenu,
+    DestroyWindow, DispatchMessageW, GetCursorPos, GetMessageW, HICON, HWND_MESSAGE,
+    IDI_APPLICATION, LoadIconW, MF_GRAYED, MF_SEPARATOR, MF_STRING, MSG, PostQuitMessage,
+    RegisterClassW, SetForegroundWindow, SetTimer, TPM_BOTTOMALIGN, TPM_RIGHTBUTTON,
+    TrackPopupMenu, TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_COMMAND,
+    WM_DESTROY, WM_LBUTTONUP, WM_RBUTTONUP, WM_TIMER, WNDCLASSW,
 };
 use windows::core::{PCWSTR, w};
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::process::{Child, Command};
 
@@ -31,6 +31,9 @@ thread_local! {
     static LAST_STATE: RefCell<Option<AuthState>> = const { RefCell::new(None) };
     /// The spawned status-window process, so repeated clicks don't open duplicates.
     static STATUS_WIN: RefCell<Option<Child>> = const { RefCell::new(None) };
+    /// The current generated tray icon + the state it represents, so we rebuild it
+    /// only on a state change and can `DestroyIcon` the previous one (no GDI leak).
+    static CURRENT_ICON: Cell<Option<(Option<AuthState>, HICON)>> = const { Cell::new(None) };
 }
 
 /// Tray-icon callback message (`uCallbackMessage`).
@@ -97,6 +100,7 @@ pub fn run() {
                 }
             }
         }
+        destroy_current_icon();
         crate::gfx::shutdown();
     }
 }
@@ -128,17 +132,49 @@ fn set_tip(nid: &mut NOTIFYICONDATAW, tip: &str) {
     }
 }
 
+/// The lock-and-key tray icon for `state`, colored by phase. Rebuilt only when the
+/// state changes; the prior icon is destroyed once the new one is in hand.
 fn icon_for(state: Option<AuthState>) -> HICON {
-    let id = match state {
-        Some(AuthState::Authenticated) => IDI_INFORMATION,
-        Some(AuthState::Failed) => IDI_ERROR,
-        Some(AuthState::Connecting | AuthState::OuterEstablished | AuthState::InnerInProgress) => {
-            IDI_WARNING
+    CURRENT_ICON.with(|c| {
+        if let Some((cached, icon)) = c.get() {
+            if cached == state {
+                return icon;
+            }
+            let next = build_icon(state);
+            // The shell copied the old icon on a prior NIM_MODIFY, so it's safe to free.
+            // SAFETY: `icon` was created by `GdipCreateHICONFromBitmap` (owned).
+            unsafe {
+                let _ = DestroyIcon(icon);
+            }
+            c.set(Some((state, next)));
+            next
+        } else {
+            let next = build_icon(state);
+            c.set(Some((state, next)));
+            next
         }
-        _ => IDI_APPLICATION,
-    };
-    // SAFETY: loading a shared stock icon (no module handle).
-    unsafe { LoadIconW(None, id) }.unwrap_or_default()
+    })
+}
+
+/// Generate the icon, falling back to a stock application icon if GDI+ drawing fails.
+fn build_icon(state: Option<AuthState>) -> HICON {
+    let icon = crate::gfx::make_tray_icon(state.unwrap_or(AuthState::Idle));
+    if icon.0.is_null() {
+        // SAFETY: loading a shared stock icon (no module handle).
+        unsafe { LoadIconW(None, IDI_APPLICATION) }.unwrap_or_default()
+    } else {
+        icon
+    }
+}
+
+/// Destroy the generated tray icon on shutdown.
+fn destroy_current_icon() {
+    if let Some((_, icon)) = CURRENT_ICON.with(Cell::take) {
+        // SAFETY: a handle we own from `build_icon`; harmless if it's the stock fallback.
+        unsafe {
+            let _ = DestroyIcon(icon);
+        }
+    }
 }
 
 fn tooltip(status: Option<&AuthStatus>) -> String {

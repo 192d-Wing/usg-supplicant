@@ -114,11 +114,11 @@ impl AuthState {
     pub fn outer_inner(self) -> (&'static str, &'static str) {
         match self {
             Self::Idle => ("—", "—"),
-            Self::Connecting => ("in progress", "waiting"),
-            Self::OuterEstablished => ("established", "waiting"),
-            Self::InnerInProgress => ("established", "in progress"),
-            Self::Authenticated => ("established", "authenticated"),
-            Self::Failed => ("see detail", "see detail"),
+            Self::Connecting => ("In progress", "Waiting"),
+            Self::OuterEstablished => ("Established", "Waiting"),
+            Self::InnerInProgress => ("Established", "In progress"),
+            Self::Authenticated => ("Established", "Authenticated"),
+            Self::Failed => ("See detail", "See detail"),
         }
     }
 }
@@ -321,7 +321,7 @@ mod tests {
         assert_eq!(AuthState::Authenticated.headline(), "Authenticated");
         assert_eq!(
             AuthState::InnerInProgress.outer_inner(),
-            ("established", "in progress")
+            ("Established", "In progress")
         );
         assert_eq!(dash(""), "—");
         assert_eq!(dash("CN=host"), "CN=host");

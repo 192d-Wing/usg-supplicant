@@ -6,13 +6,22 @@ use std::cell::Cell;
 use std::path::PathBuf;
 
 use windows::Win32::Graphics::GdiPlus::{
-    GdipCreateBitmapFromFile, GdipCreatePen1, GdipCreateSolidFill, GdipDeleteBrush, GdipDeletePen,
-    GdipDisposeImage, GdipDrawArcI, GdipFillEllipseI, GdiplusShutdown, GdiplusStartup,
-    GdiplusStartupInput, GpBitmap, GpGraphics, GpImage, Unit,
+    GdipCreateBitmapFromFile, GdipCreateBitmapFromScan0, GdipCreateHICONFromBitmap, GdipCreatePen1,
+    GdipCreateSolidFill, GdipDeleteBrush, GdipDeleteGraphics, GdipDeletePen, GdipDisposeImage,
+    GdipDrawArcI, GdipDrawImageRectI, GdipDrawLineI, GdipFillEllipseI, GdipFillRectangleI,
+    GdipGetImageGraphicsContext, GdipSetInterpolationMode, GdipSetPixelOffsetMode,
+    GdipSetSmoothingMode, GdiplusShutdown, GdiplusStartup, GdiplusStartupInput, GpBitmap,
+    GpGraphics, GpImage, InterpolationModeHighQualityBicubic, PixelOffsetModeHighQuality,
+    SmoothingModeAntiAlias, Unit,
 };
+use windows::Win32::UI::WindowsAndMessaging::HICON;
 use windows::core::PCWSTR;
 
 use usg_status::AuthState;
+
+/// `PixelFormat32bppARGB` (not exposed as a named const by the crate): premultiplied
+/// 32-bit BGRA, the format `GdipCreateHICONFromBitmap` expects for an alpha icon.
+const PIXEL_FORMAT_32BPP_ARGB: i32 = 0x0026_200A;
 
 thread_local! {
     static TOKEN: Cell<usize> = const { Cell::new(0) };
@@ -52,6 +61,23 @@ pub fn shutdown() {
 /// The cached seal image (null if none loaded).
 pub fn seal() -> *mut GpImage {
     SEAL.with(Cell::get)
+}
+
+/// Draw the cached seal into `g` at `(x, y)` sized `d×d`, using high-quality
+/// downscaling so the detailed seal stays crisp when shrunk. Returns `false` if no
+/// seal is loaded, so the caller can draw a placeholder instead.
+///
+/// # Safety
+/// `g` must be a valid `GpGraphics`.
+pub unsafe fn draw_seal(g: *mut GpGraphics, x: i32, y: i32, d: i32) -> bool {
+    let img = seal();
+    if img.is_null() {
+        return false;
+    }
+    let _ = GdipSetInterpolationMode(g, InterpolationModeHighQualityBicubic);
+    let _ = GdipSetPixelOffsetMode(g, PixelOffsetModeHighQuality);
+    let _ = GdipDrawImageRectI(g, img, x, y, d, d);
+    true
 }
 
 /// Load the DoD seal PNG (GDI+) from the first candidate that opens, or null.
@@ -116,6 +142,110 @@ pub unsafe fn draw_indicator(
         AuthState::Failed => fill_circle(g, 0xFFE5_3935, x, y, d),        // red
         AuthState::Idle => fill_circle(g, 0xFF9E_9E9E, x, y, d),          // gray
         _ => spinner(g, frame, x, y, d),                                  // in progress
+    }
+}
+
+/// Build a 32×32 tray icon: a padlock + key, with the padlock body colored by
+/// `state` (green authenticated, red failed, amber in-progress, steel idle). The
+/// caller owns the returned `HICON` and must `DestroyIcon` it. Null on failure.
+///
+/// GDI+ must be started (see [`startup`]).
+pub fn make_tray_icon(state: AuthState) -> HICON {
+    let body = match state {
+        AuthState::Authenticated => 0xFF43_A047, // green
+        AuthState::Failed => 0xFFE5_3935,        // red
+        AuthState::Idle => 0xFF90_A4AE,          // steel
+        _ => 0xFFFB_C02D,                        // amber (in progress)
+    };
+    const METAL: u32 = 0xFFCF_D8DC; // shackle + key
+    const HOLE: u32 = 0xFF26_3238; // keyhole
+
+    // SAFETY: allocate an ARGB GDI+ bitmap, draw into it, convert to an HICON.
+    unsafe {
+        let mut bmp: *mut GpBitmap = std::ptr::null_mut();
+        if GdipCreateBitmapFromScan0(32, 32, 0, PIXEL_FORMAT_32BPP_ARGB, None, &mut bmp).0 != 0
+            || bmp.is_null()
+        {
+            return HICON::default();
+        }
+        let mut g: *mut GpGraphics = std::ptr::null_mut();
+        if GdipGetImageGraphicsContext(bmp.cast(), &mut g).0 == 0 {
+            let _ = GdipSetSmoothingMode(g, SmoothingModeAntiAlias);
+
+            // Key (behind the lock, lower-right): round bow + stem + two teeth.
+            stroke_ellipse(g, METAL, 19, 17, 9, 9, 3.0);
+            stroke_line(g, METAL, 26, 24, 30, 28, 3.0);
+            stroke_line(g, METAL, 28, 26, 26, 28, 2.0);
+            stroke_line(g, METAL, 30, 28, 28, 30, 2.0);
+
+            // Padlock shackle: an open U above the body.
+            stroke_arc(g, METAL, 6, 3, 14, 16, 180.0, 180.0, 3.0);
+            stroke_line(g, METAL, 6, 11, 6, 16, 3.0);
+            stroke_line(g, METAL, 20, 11, 20, 16, 3.0);
+
+            // Padlock body.
+            fill_rect(g, body, 4, 15, 18, 14);
+            // Keyhole.
+            fill_circle(g, HOLE, 11, 19, 4);
+            fill_rect(g, HOLE, 12, 21, 2, 5);
+
+            let _ = GdipDeleteGraphics(g);
+        }
+        let mut icon = HICON::default();
+        let _ = GdipCreateHICONFromBitmap(bmp, &mut icon);
+        let _ = GdipDisposeImage(bmp.cast());
+        icon
+    }
+}
+
+unsafe fn fill_rect(g: *mut GpGraphics, argb: u32, x: i32, y: i32, w: i32, h: i32) {
+    let mut brush = std::ptr::null_mut();
+    if GdipCreateSolidFill(argb, &mut brush).0 == 0 {
+        let _ = GdipFillRectangleI(g, brush.cast(), x, y, w, h);
+        let _ = GdipDeleteBrush(brush.cast());
+    }
+}
+
+unsafe fn stroke_line(g: *mut GpGraphics, argb: u32, x1: i32, y1: i32, x2: i32, y2: i32, w: f32) {
+    let mut pen = std::ptr::null_mut();
+    if GdipCreatePen1(argb, w, Unit(2), &mut pen).0 == 0 {
+        let _ = GdipDrawLineI(g, pen, x1, y1, x2, y2);
+        let _ = GdipDeletePen(pen);
+    }
+}
+
+#[allow(clippy::too_many_arguments)] // mirrors the GDI+ arc signature (rect + angles)
+unsafe fn stroke_arc(
+    g: *mut GpGraphics,
+    argb: u32,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    start: f32,
+    sweep: f32,
+    pen_w: f32,
+) {
+    let mut pen = std::ptr::null_mut();
+    if GdipCreatePen1(argb, pen_w, Unit(2), &mut pen).0 == 0 {
+        let _ = GdipDrawArcI(g, pen, x, y, w, h, start, sweep);
+        let _ = GdipDeletePen(pen);
+    }
+}
+
+unsafe fn stroke_ellipse(
+    g: *mut GpGraphics,
+    argb: u32,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    pen_w: f32,
+) {
+    let mut pen = std::ptr::null_mut();
+    if GdipCreatePen1(argb, pen_w, Unit(2), &mut pen).0 == 0 {
+        let _ = GdipDrawArcI(g, pen, x, y, w, h, 0.0, 360.0);
+        let _ = GdipDeletePen(pen);
     }
 }
 

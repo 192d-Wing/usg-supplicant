@@ -18,8 +18,7 @@ use windows::Win32::Graphics::Gdi::{
     HDC, InvalidateRect, PAINTSTRUCT, SRCCOPY, SelectObject, SetBkMode, SetTextColor, TRANSPARENT,
 };
 use windows::Win32::Graphics::GdiPlus::{
-    GdipCreateFromHDC, GdipDeleteGraphics, GdipDrawImageRectI, GdipSetSmoothingMode, GpGraphics,
-    SmoothingModeAntiAlias,
+    GdipCreateFromHDC, GdipDeleteGraphics, GdipSetSmoothingMode, GpGraphics, SmoothingModeAntiAlias,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -212,11 +211,8 @@ fn paint(hwnd: HWND) {
         let mut g: *mut GpGraphics = std::ptr::null_mut();
         if GdipCreateFromHDC(mem, &mut g).0 == 0 {
             let _ = GdipSetSmoothingMode(g, SmoothingModeAntiAlias);
-            let seal = crate::gfx::seal();
-            if seal.is_null() {
+            if !crate::gfx::draw_seal(g, 14, 14, 76) {
                 crate::gfx::draw_indicator(g, AuthState::Idle, 0, 14, 14, 76); // placeholder disc
-            } else {
-                let _ = GdipDrawImageRectI(g, seal, 14, 14, 76, 76);
             }
             crate::gfx::draw_indicator(g, state, frame, W - 52, 18, 30);
             let _ = GdipDeleteGraphics(g);
