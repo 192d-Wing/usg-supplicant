@@ -75,6 +75,33 @@ fn unknown_handle_fails_closed() {
 }
 
 #[test]
+fn fetch_response_size_probe_does_not_drop_the_response() {
+    use eaphost::session_registry::ResponseFetch;
+
+    let reg = SessionRegistry::new();
+    let h = reg.begin(session(vec![Ok(DriverStep::Respond(
+        b"client-hello".to_vec(),
+    ))]));
+    assert_eq!(reg.process(h, b"req"), Some(ProcessAction::Respond));
+
+    // First call: a too-small (size-probe) buffer must report the length and KEEP
+    // the response buffered — the bug was that it consumed it here.
+    match reg.fetch_response(h, 0) {
+        ResponseFetch::TooSmall(len) => assert_eq!(len, b"client-hello".len()),
+        other => panic!("expected TooSmall, got {other:?}"),
+    }
+    // Second call with a big-enough buffer: the response survived and is delivered.
+    match reg.fetch_response(h, 64) {
+        ResponseFetch::Taken(bytes) => assert_eq!(bytes, b"client-hello"),
+        other => panic!("expected Taken, got {other:?}"),
+    }
+    // Now it's consumed.
+    assert!(matches!(reg.fetch_response(h, 64), ResponseFetch::None));
+    // Unknown handle fails closed.
+    assert!(matches!(reg.fetch_response(12345, 64), ResponseFetch::None));
+}
+
+#[test]
 fn end_drops_the_session_and_is_idempotent() {
     let reg = SessionRegistry::new();
     let h = reg.begin(session(vec![Ok(success(0x11))]));

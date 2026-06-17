@@ -48,7 +48,7 @@ use crate::builder::build_driver;
 use crate::config::SessionConfigBlob;
 use crate::os_fips::assert_fips_policy;
 use crate::session::{AuthResult, PeerSession, ProcessAction, SessionKind};
-use crate::session_registry::SessionRegistry;
+use crate::session_registry::{ResponseFetch, SessionRegistry};
 
 /// EAP type 55 (TEAP). A distinct **Author ID** in the registry (registration)
 /// keeps us from colliding with the in-box Windows TEAP method.
@@ -615,22 +615,39 @@ extern "system" fn EapPeerGetResponsePacket(
     if pcb_send_packet.is_null() {
         return E_FAIL;
     }
-    let Some(resp) = registry().take_response(ptr_to_handle(session_handle)) else {
-        return E_FAIL;
+    // A null output buffer is a pure size probe; model its capacity as 0 so the
+    // response is reported-but-kept. Reading *pcb_send_packet is only valid once we
+    // know the buffer pointer is non-null (the caller's in/out size word). Per the
+    // EapPeerGetResponsePacket contract, *pcb_send_packet is the buffer's true
+    // capacity — the bounds of the copy below rest on the host declaring it honestly.
+    // SAFETY: pcb_send_packet is non-null (checked); it's the caller's size word.
+    let avail = if p_send_packet.is_null() {
+        0
+    } else {
+        (unsafe { *pcb_send_packet }) as usize
     };
-    // SAFETY: pcb_send_packet is the caller's in/out buffer-size word.
-    let avail = unsafe { *pcb_send_packet } as usize;
-    if p_send_packet.is_null() || avail < resp.len() {
-        // Tell the caller how much room we need (the two-call size pattern).
-        unsafe { *pcb_send_packet = resp.len() as u32 };
-        return E_FAIL;
+    // Consume the buffered response ONLY if it fits; a size-probe / too-small call
+    // leaves it queued for the follow-up fetch (the two-call EAPHost convention).
+    match registry().fetch_response(ptr_to_handle(session_handle), avail) {
+        ResponseFetch::None => E_FAIL,
+        ResponseFetch::TooSmall(len) => {
+            // SAFETY: pcb_send_packet is non-null (checked above).
+            unsafe { *pcb_send_packet = u32::try_from(len).unwrap_or(u32::MAX) };
+            E_FAIL
+        }
+        ResponseFetch::Taken(resp) => {
+            // SAFETY: the buffer was confirmed large enough for the whole packet.
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    resp.as_ptr(),
+                    p_send_packet.cast::<u8>(),
+                    resp.len(),
+                );
+                *pcb_send_packet = u32::try_from(resp.len()).unwrap_or(u32::MAX);
+            }
+            ERROR_SUCCESS.0
+        }
     }
-    // SAFETY: the buffer has room (checked) for the whole EAP packet.
-    unsafe {
-        core::ptr::copy_nonoverlapping(resp.as_ptr(), p_send_packet.cast::<u8>(), resp.len());
-        *pcb_send_packet = resp.len() as u32;
-    }
-    ERROR_SUCCESS.0
 }
 
 extern "system" fn EapPeerGetResult(

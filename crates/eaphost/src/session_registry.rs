@@ -17,6 +17,18 @@ use crate::session::{AuthResult, PeerSession, ProcessAction, TeapStep};
 /// Never zero, so the FFI can treat 0 as "no session".
 pub type SessionHandle = u64;
 
+/// Outcome of [`SessionRegistry::fetch_response`] for the size-aware FFI.
+#[derive(Debug)]
+pub enum ResponseFetch {
+    /// No session for the handle, or no response buffered.
+    None,
+    /// The caller's buffer is too small: the response is **left in place** and the
+    /// required length is reported so the caller retries with a big-enough buffer.
+    TooSmall(usize),
+    /// The buffer fit: the response is consumed and returned.
+    Taken(Vec<u8>),
+}
+
 struct Inner<D: TeapStep> {
     next: SessionHandle,
     sessions: HashMap<SessionHandle, PeerSession<D>>,
@@ -86,6 +98,28 @@ impl<D: TeapStep> SessionRegistry<D> {
             i.sessions
                 .get_mut(&handle)
                 .and_then(PeerSession::take_response)
+        })
+    }
+
+    /// Fetch the buffered response for `handle`, but **only consume it if it fits**
+    /// in `avail` bytes; otherwise report the required length without taking it.
+    ///
+    /// This (atomically, under one lock) supports `EAPHost`'s two-call
+    /// `EapPeerGetResponsePacket` convention — probe with a small/null buffer to
+    /// learn the size, then fetch — without dropping the response on the probe call.
+    pub fn fetch_response(&self, handle: SessionHandle, avail: usize) -> ResponseFetch {
+        self.with(|i| {
+            let Some(session) = i.sessions.get_mut(&handle) else {
+                return ResponseFetch::None;
+            };
+            match session.response_len() {
+                None => ResponseFetch::None,
+                Some(len) if len > avail => ResponseFetch::TooSmall(len),
+                // len <= avail: safe to consume.
+                Some(_) => session
+                    .take_response()
+                    .map_or(ResponseFetch::None, ResponseFetch::Taken),
+            }
         })
     }
 

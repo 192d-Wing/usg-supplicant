@@ -191,6 +191,14 @@ impl<D: TeapStep> PeerSession<D> {
         self.pending_response.take()
     }
 
+    /// The buffered response length without consuming it — lets the FFI answer a
+    /// size probe (`EapPeerGetResponsePacket` with a small/null buffer) without
+    /// dropping the response before the follow-up fetch.
+    #[must_use]
+    pub fn response_len(&self) -> Option<usize> {
+        self.pending_response.as_ref().map(Vec::len)
+    }
+
     /// The terminal result, once the session has finished (`EapPeerGetResult`).
     #[must_use]
     pub fn result(&self) -> Option<&AuthResult> {
