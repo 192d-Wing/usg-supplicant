@@ -25,7 +25,12 @@
 //!   cargo test -p eaphost --test real_eaphost_config -- --ignored --nocapture
 //! ```
 #![cfg(windows)]
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::cast_possible_truncation)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::cast_possible_truncation
+)]
 
 use std::sync::Mutex;
 
