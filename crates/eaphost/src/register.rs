@@ -30,6 +30,19 @@ pub const USG_TYPE_ID: u32 = 55;
 /// Friendly name shown for the method.
 const FRIENDLY_NAME: &str = "usg-TEAP/1.3";
 
+/// `Properties` bitmask (eaptypes.h `eapProp*`) advertising what the method does,
+/// so `EAPHost` enables the matching behavior (identity delegation, machine/user
+/// auth, config). A zero mask makes `EAPHost` treat the method as capability-less
+/// and never source an outer identity from it. We emit MPPE keys, are a tunnel
+/// method with identity privacy (anonymous outer identity), do machine and user
+/// auth, and support configuration.
+const METHOD_PROPERTIES: u32 = 0x0008_0000  // eapPropMppeEncryption
+    | 0x0010_0000  // eapPropTunnelMethod
+    | 0x0020_0000  // eapPropSupportsConfig
+    | 0x0100_0000  // eapPropMachineAuth
+    | 0x0200_0000  // eapPropUserAuth
+    | 0x0400_0000; // eapPropIdentityPrivacy
+
 /// The method's registry subkey path, relative to a root hive: the methods base,
 /// then our Author ID and the TEAP type id (decimal, as `EAPHost` expects).
 fn method_subkey(base: &str) -> String {
@@ -50,9 +63,11 @@ fn u16_bytes(w: &[u16]) -> &[u8] {
 
 /// Register the peer method under `root` at `base` (`base` is the methods key).
 /// Writes `PeerDllPath` (the auth/method DLL), `PeerIdentityPath` (the DLL whose
-/// by-name `EapPeerGetIdentity` `EAPHost` calls to build the EAP-Response/Identity
-/// — the same DLL), `PeerFriendlyName`, the username/password-dialog opt-outs, and
-/// `Properties`. Without `PeerIdentityPath`, `EAPHost` aborts a session with
+/// by-name `EapPeerGetIdentity` `EAPHost` calls to build the EAP-Response/Identity),
+/// `PeerConfigUIPath` (the DLL whose `EapPeerConfigXml2Blob`/`Blob2Xml` `EAPHost`
+/// calls from the host-API `EapHostPeerConfigXml2Blob` path) — all the same DLL —
+/// plus `PeerFriendlyName`, the username/password-dialog opt-outs, and `Properties`.
+/// Without `PeerIdentityPath`, `EAPHost` aborts a session with
 /// `EAP_E_EAPHOST_IDENTITY_UNKNOWN` before any method packet.
 ///
 /// # Errors
@@ -84,12 +99,16 @@ pub fn register_under(root: HKEY, base: &str, dll_path: &str) -> Result<(), EapH
         // EAPHost loads PeerIdentityPath and calls its by-name EapPeerGetIdentity
         // to produce the EAP-Response/Identity. Our DLL serves both roles.
         set_sz(hkey, "PeerIdentityPath", dll_path)?;
+        // EAPHost loads PeerConfigUIPath for the config-conversion entry points
+        // (EapPeerConfigXml2Blob / EapPeerConfigBlob2Xml) used by the host-API
+        // EapHostPeerConfigXml2Blob path. Our DLL serves this role too.
+        set_sz(hkey, "PeerConfigUIPath", dll_path)?;
         set_sz(hkey, "PeerFriendlyName", FRIENDLY_NAME)?;
         // Certificate method: never prompt for a username/password (mirrors the
         // in-box TEAP). EAPHost then sources the identity from EapPeerGetIdentity.
         set_dword(hkey, "PeerInvokeUsernameDialog", 0)?;
         set_dword(hkey, "PeerInvokePasswordDialog", 0)?;
-        set_dword(hkey, "Properties", 0)?;
+        set_dword(hkey, "Properties", METHOD_PROPERTIES)?;
         Ok(())
     })();
     // SAFETY: close the key we opened, regardless of the value writes' outcome.
