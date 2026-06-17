@@ -283,6 +283,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "eaphost-cli"
+version = "0.1.0"
+dependencies = [
+ "eaphost",
+]
+
+[[package]]
 name = "either"
 version = "1.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
