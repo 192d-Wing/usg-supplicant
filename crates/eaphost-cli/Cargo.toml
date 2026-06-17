@@ -1,0 +1,24 @@
+[package]
+name = "eaphost-cli"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Provisioning CLI for the usg-supplicant EAPHost peer method: build a session config blob, emit dot3svc LAN / EapHostConfig profiles, and register the method in HKLM."
+publish = false
+
+[[bin]]
+name = "usg-eaphost"
+path = "src/main.rs"
+
+[dependencies]
+eaphost = { path = "../eaphost" }
+
+# Provisioning tool: the strict FIPS-library lint baseline does not apply. Basic
+# clippy hygiene only; `unsafe` stays forbidden (no FFI here — it shells out).
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }

@@ -190,20 +190,22 @@ credential plumbing (machine context, profile, connection-id registration) that 
 hand-rolled `EapHostPeer*` caller does not. So the remaining validation is to let
 `dot3svc` drive the method on a real 802.1X link.
 
-**Supplicant side (this repo provides):**
+**Supplicant side (this repo provides):** the `usg-eaphost` CLI (`eaphost-cli`
+crate) wraps `eaphost::{profile, register}`:
 
-- `eaphost::profile::eap_host_config_xml(blob)` — the `EapHostConfig` selecting our
-  method and embedding the `SessionConfigBlob`.
-- `eaphost::profile::lan_profile_xml(blob)` — a `dot3svc` LAN profile (OneX, machine
-  auth) wrapping it. Install with `netsh lan add profile filename=<f> interface=<if>`.
-- `eaphost::register::register(dll_path)` — the HKLM method registration.
+- `usg-eaphost emit-config …` / `emit-profile …` — print the `EapHostConfig` /
+  `dot3svc` LAN profile XML for a given `--server-name` / `--cert-subject` (+
+  `--root`, `--machine`/`--user`, `--max-fragment`, …).
+- `usg-eaphost register --dll <path>` / `unregister` — the HKLM method registration.
+- `usg-eaphost install-profile --interface <if> …` — emit the LAN profile and
+  `netsh lan add profile` it in one step.
 
 **Provisioning + run (elevated):**
 
 1. `sc.exe config dot3svc start= auto && net start dot3svc` (Wired AutoConfig).
-2. Register the method (deploy `eaphost.dll`, then `register()`), copy the DLL to a
-   stable path, **not** a `usg-eaphost-testN.dll` scratch name.
-3. Write `lan_profile_xml(blob)` to a file; `netsh lan add profile filename=… interface="<adapter>"`.
+2. Deploy `eaphost.dll` to a stable path (**not** a `usg-eaphost-testN.dll` scratch
+   name) and `usg-eaphost register --dll <that path>`.
+3. `usg-eaphost install-profile --interface "<adapter>" --server-name <s> --cert-subject <subj> --root <ca.der>`.
 4. Enable 802.1X on that interface; on link-up `dot3svc` initiates EAPOL and drives
    our method. Watch via `netsh lan show interfaces` and the EAPHost event log /
    `netsh trace start scenario=Wired ...`.
