@@ -617,7 +617,9 @@ extern "system" fn EapPeerGetResponsePacket(
     }
     // A null output buffer is a pure size probe; model its capacity as 0 so the
     // response is reported-but-kept. Reading *pcb_send_packet is only valid once we
-    // know the buffer pointer is non-null (the caller's in/out size word).
+    // know the buffer pointer is non-null (the caller's in/out size word). Per the
+    // EapPeerGetResponsePacket contract, *pcb_send_packet is the buffer's true
+    // capacity — the bounds of the copy below rest on the host declaring it honestly.
     // SAFETY: pcb_send_packet is non-null (checked); it's the caller's size word.
     let avail = if p_send_packet.is_null() {
         0
