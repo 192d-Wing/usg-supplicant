@@ -32,6 +32,12 @@ pub fn view(identity: Identity, subject: &str) {
 
 /// Locate the cert by subject CN, export its DER, and shell-open it. `None` if the
 /// store can't be opened or no cert matches.
+///
+/// Limitation: this matches the first cert whose subject contains the CN, without the
+/// client-auth-EKU filter the supplicant applies when *selecting* the cert. If a store
+/// holds several certs sharing that CN (e.g. a renewed pair), the viewer may show a
+/// different one than was used to authenticate. A future change can publish the cert
+/// thumbprint in the status to find it exactly.
 fn try_view_exact(identity: Identity, subject: &str) -> Option<()> {
     let cn = common_name(subject);
     if cn.is_empty() {
@@ -71,7 +77,7 @@ fn try_view_exact(identity: Identity, subject: &str) -> Option<()> {
         } else {
             let der =
                 std::slice::from_raw_parts((*ctx).pbCertEncoded, (*ctx).cbCertEncoded as usize);
-            let opened = write_and_open(der);
+            let opened = write_and_open(identity, der);
             let _ = CertFreeCertificateContext(Some(ctx));
             opened
         };
@@ -81,8 +87,15 @@ fn try_view_exact(identity: Identity, subject: &str) -> Option<()> {
 }
 
 /// Write the DER to a temp `.cer` and shell-open it (Windows shows its cert dialog).
-fn write_and_open(der: &[u8]) -> Option<()> {
-    let path = std::env::temp_dir().join("usg-supplicant-view.cer");
+/// The filename is per-identity so opening the computer and user certs in quick
+/// succession can't have one write overwrite the other's file before its async
+/// viewer reads it.
+fn write_and_open(identity: Identity, der: &[u8]) -> Option<()> {
+    let name = match identity {
+        Identity::Machine => "usg-supplicant-view-machine.cer",
+        Identity::User => "usg-supplicant-view-user.cer",
+    };
+    let path = std::env::temp_dir().join(name);
     std::fs::write(&path, der).ok()?;
     shell_open(&path);
     Some(())

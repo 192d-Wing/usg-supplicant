@@ -94,26 +94,42 @@ fn status_meta() -> &'static Mutex<HashMap<u64, StatusMeta>> {
     M.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// Last-known `(machine_cert, user_cert)` so both credentials survive across the one-
+/// at-a-time machine/user sessions. The published status file is the cross-process
+/// channel, but a transient read miss (the file is briefly locked mid-rename) must
+/// not wipe the other identity's cert, so we also remember it in-process.
+fn last_certs() -> &'static Mutex<(String, String)> {
+    static C: OnceLock<Mutex<(String, String)>> = OnceLock::new();
+    C.get_or_init(|| Mutex::new((String::new(), String::new())))
+}
+
 /// Write a status snapshot for `handle` (no-op if the handle has no metadata).
 fn publish_status(handle: u64, state: usg_status::AuthState, detail: &str) {
     let map = status_meta().lock().unwrap_or_else(PoisonError::into_inner);
     if let Some(meta) = map.get(&handle) {
-        // Preserve the *other* identity's cert from the previously published status,
-        // so the window can show the machine and user certs together even though one
-        // session runs at a time.
-        let (mut machine_cert, mut user_cert) = usg_status::read_status()
-            .map(|p| (p.machine_cert, p.user_cert))
-            .unwrap_or_default();
+        // Preserve the *other* identity's cert so the window can show both. Start from
+        // the in-process memory, then refresh from the published file's non-empty
+        // values (covers a different process publishing) — a transient read miss or a
+        // momentarily-empty field then can't wipe a cert we already know.
+        let mut certs = last_certs().lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(prev) = usg_status::read_status() {
+            if !prev.machine_cert.is_empty() {
+                certs.0 = prev.machine_cert;
+            }
+            if !prev.user_cert.is_empty() {
+                certs.1 = prev.user_cert;
+            }
+        }
         match meta.identity {
-            usg_status::Identity::Machine => machine_cert.clone_from(&meta.cert_subject),
-            usg_status::Identity::User => user_cert.clone_from(&meta.cert_subject),
+            usg_status::Identity::Machine => certs.0.clone_from(&meta.cert_subject),
+            usg_status::Identity::User => certs.1.clone_from(&meta.cert_subject),
         }
         let _ = usg_status::write_status(&usg_status::AuthStatus {
             state,
             identity: meta.identity,
             cert_subject: meta.cert_subject.clone(),
-            machine_cert,
-            user_cert,
+            machine_cert: certs.0.clone(),
+            user_cert: certs.1.clone(),
             server_name: meta.server_name.clone(),
             detail: detail.to_string(),
             updated_unix: usg_status::unix_now(),
