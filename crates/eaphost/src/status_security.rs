@@ -45,14 +45,21 @@ pub(crate) fn secure_status_dir() -> bool {
     if SECURED.get().is_some() {
         return true;
     }
-    let mut dir = usg_status::status_file_path();
+    let file = usg_status::status_file_path();
+    let mut dir = file.clone();
     dir.pop(); // drop the "status" filename, leaving the directory.
-    if apply(&dir) {
-        let _ = SECURED.set(());
-        true
-    } else {
-        false
+    if !apply(&dir) {
+        return false;
     }
+    // Now that we own the directory full-control, drop any pre-existing status file:
+    // one an attacker planted while the directory was still world-writable would keep
+    // its own DACL and content (re-ACLing the directory doesn't touch existing
+    // children). The live session republishes a fresh, protected one. We hold
+    // FILE_DELETE_CHILD on the now-hardened directory, so this succeeds regardless of
+    // the file's own ACL.
+    let _ = std::fs::remove_file(&file);
+    let _ = SECURED.set(());
+    true
 }
 
 /// Create `dir` (if absent) with the protected DACL, then enforce owner + protected
@@ -94,13 +101,15 @@ fn apply(dir: &Path) -> bool {
             | PROTECTED_DACL_SECURITY_INFORMATION.0,
     );
     // SAFETY: create the directory with our DACL (a no-op error if it already
-    // exists), then enforce owner + protected DACL on the existing directory so a
-    // directory an attacker pre-created with a weak ACL is reset. SYSTEM holds the
-    // privileges to set the owner; if it can't, `SetFileSecurityW` returns false and
-    // we report failure (the caller then skips publishing).
+    // exists), then — only if it's a real directory and NOT a reparse point — enforce
+    // owner + protected DACL so a directory an attacker pre-created with a weak ACL is
+    // reset. The reparse check rejects a junction an attacker planted (so the
+    // path-based `SetFileSecurityW` can't be redirected to secure another location).
+    // SYSTEM holds the privileges to set the owner; if it can't, `SetFileSecurityW`
+    // returns false and we report failure (the caller then skips publishing).
     let ok = unsafe {
         let _ = CreateDirectoryW(PCWSTR(path.as_ptr()), Some(&raw const sa));
-        SetFileSecurityW(PCWSTR(path.as_ptr()), info, psd).as_bool()
+        is_real_dir(dir) && SetFileSecurityW(PCWSTR(path.as_ptr()), info, psd).as_bool()
     };
 
     // SAFETY: free the descriptor `ConvertString...` allocated with `LocalAlloc`.
@@ -108,4 +117,14 @@ fn apply(dir: &Path) -> bool {
         let _ = LocalFree(Some(HLOCAL(psd.0)));
     }
     ok
+}
+
+/// True only if `dir` exists, is a real directory, and is **not** a reparse point /
+/// symlink — so securing it by path can't be redirected through a junction an
+/// attacker pre-created. `symlink_metadata` does not traverse the final component.
+fn is_real_dir(dir: &Path) -> bool {
+    match std::fs::symlink_metadata(dir) {
+        Ok(md) => md.is_dir() && !md.file_type().is_symlink(),
+        Err(_) => false,
+    }
 }
