@@ -37,6 +37,14 @@ pub fn eap_host_config_xml(connection_blob: &[u8]) -> String {
 /// A `dot3svc` wired **LAN profile** that enables 802.1X with machine
 /// authentication and our EAP method, embedding [`eap_host_config_xml`]. Install
 /// with `netsh lan add profile filename=<this> interface=<adapter>`.
+///
+/// The structure mirrors Microsoft's canonical wired machine-certificate sample
+/// (the `<security>` child order, `authMode` before `<EAPConfig>`, the `http://`
+/// namespaces). The embedded `EapHostConfig` half is validated live against
+/// `EapHostPeerConfigXml2Blob`; the surrounding `LANProfile`/`OneX` wrapper is
+/// pending live `netsh lan add profile` validation (`WINDOWS_DEV.md` §4.6). Only a
+/// machine-auth profile is emitted (the boot path); a user-auth variant would set
+/// `authMode` to `user`/`machineOrUser`.
 #[must_use]
 pub fn lan_profile_xml(connection_blob: &[u8]) -> String {
     format!(
