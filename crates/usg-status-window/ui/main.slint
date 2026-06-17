@@ -1,148 +1,174 @@
 import { Spinner, Button } from "std-widgets.slint";
 
-// One "Label: value" detail row.
-component Field inherits Rectangle {
+// One centered "Label: value" detail row (label right-aligned, value left).
+component Field inherits HorizontalLayout {
     in property <string> label;
     in property <string> value;
-    height: 26px;
+    spacing: 10px;
+    Text {
+        text: root.label + ":";
+        color: #c2d4ea;
+        font-size: 13px;
+        width: 190px;
+        horizontal-alignment: right;
+        vertical-alignment: center;
+    }
+    Text {
+        text: root.value;
+        color: white;
+        font-size: 13px;
+        font-weight: 600;
+        width: 220px;
+        horizontal-alignment: left;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+}
+
+// A labeled certificate block: caption, the full DN wrapped, and a View button.
+component CertBlock inherits VerticalLayout {
+    in property <string> caption;
+    in property <string> subject;
+    in property <bool> available;
+    callback view();
+    spacing: 3px;
+    Text {
+        text: root.caption;
+        color: #c2d4ea;
+        font-size: 13px;
+        horizontal-alignment: center;
+    }
+    Text {
+        text: root.subject;
+        color: white;
+        font-size: 13px;
+        font-weight: 600;
+        horizontal-alignment: center;
+        wrap: word-wrap;
+    }
     HorizontalLayout {
-        spacing: 10px;
-        Text {
-            text: root.label;
-            color: #c2d4ea;
-            font-size: 13px;
-            width: 168px;
-            horizontal-alignment: left;
-            vertical-alignment: center;
-        }
-        Text {
-            text: root.value;
-            color: white;
-            font-size: 13px;
-            font-weight: 600;
-            overflow: elide;
-            vertical-alignment: center;
-            horizontal-stretch: 1;
+        alignment: center;
+        padding-top: 2px;
+        Button {
+            text: "View…";
+            enabled: root.available;
+            clicked => {
+                root.view();
+            }
         }
     }
 }
 
 export component MainWindow inherits Window {
     title: "USG Supplicant — Authentication Status";
-    width: 520px;
-    height: 420px;
+    width: 560px;
+    height: 560px;
     background: #355e93;
     icon: root.seal;
 
     // Set from Rust on a poll timer.
+    in property <image> logo;
     in property <image> seal;
     in property <string> headline: "—";
     in property <string> session: "—";
     in property <string> outer: "—";
     in property <string> inner: "—";
-    in property <string> certificate: "—";
+    in property <string> machine-cert: "—";
+    in property <string> user-cert: "—";
+    in property <bool> has-machine-cert: false;
+    in property <bool> has-user-cert: false;
     in property <string> server: "—";
     in property <string> detail: "";
     in property <string> updated: "—";
     // 0 idle/unknown · 1 in-progress · 2 authenticated · 3 failed
     in property <int> indicator: 0;
-    // Whether a certificate is available to open in the Windows viewer.
-    in property <bool> has-cert: false;
 
-    // Fired by the "View Certificate…" button.
-    callback view-certificate();
+    // Fired by the per-certificate "View…" buttons.
+    callback view-computer-cert();
+    callback view-user-cert();
 
     VerticalLayout {
-        padding: 24px;
-        spacing: 16px;
+        // Header banner: the U.S. Department of War logo across the top.
+        Image {
+            source: root.logo;
+            image-fit: contain;
+            height: 120px;
+        }
 
-        // Header: seal, headline, status indicator.
-        HorizontalLayout {
-            spacing: 16px;
-            Image {
-                source: root.seal;
-                image-fit: contain;
-                width: 88px;
-                height: 88px;
-            }
-            VerticalLayout {
+        VerticalLayout {
+            padding-left: 24px;
+            padding-right: 24px;
+            padding-bottom: 22px;
+            spacing: 14px;
+
+            // Headline + status indicator, centered.
+            HorizontalLayout {
                 alignment: center;
-                horizontal-stretch: 1;
+                spacing: 12px;
+                Rectangle {
+                    width: 30px;
+                    height: 30px;
+                    if root.indicator == 1: Spinner {
+                        width: 28px;
+                        height: 28px;
+                        indeterminate: true;
+                    }
+                    if root.indicator != 1: Rectangle {
+                        width: 22px;
+                        height: 22px;
+                        border-radius: 11px;
+                        background: root.indicator == 2 ? #43a047
+                            : root.indicator == 3 ? #e53935
+                            : #8a8a8a;
+                    }
+                }
                 Text {
                     text: root.headline;
                     color: white;
                     font-size: 24px;
                     font-weight: 700;
-                    overflow: elide;
-                }
-                Text {
-                    text: "TEAP · EAP-TLS";
-                    color: #9fb7d6;
-                    font-size: 13px;
+                    vertical-alignment: center;
                 }
             }
-            // Status indicator: spinner while in progress, colored disc otherwise.
+
             Rectangle {
-                width: 44px;
-                height: 44px;
-                if root.indicator == 1: Spinner {
-                    width: 40px;
-                    height: 40px;
-                    indeterminate: true;
-                }
-                if root.indicator != 1: Rectangle {
-                    width: 28px;
-                    height: 28px;
-                    border-radius: 14px;
-                    background: root.indicator == 2 ? #43a047
-                        : root.indicator == 3 ? #e53935
-                        : #8a8a8a;
+                height: 1px;
+                background: #4d74a6;
+            }
+
+            // Status rows, centered as a block.
+            HorizontalLayout {
+                alignment: center;
+                VerticalLayout {
+                    spacing: 7px;
+                    Field { label: "Session"; value: root.session; }
+                    Field { label: "Outer (TEAP tunnel)"; value: root.outer; }
+                    Field { label: "Inner (EAP-TLS)"; value: root.inner; }
+                    Field { label: "Server"; value: root.server; }
+                    Field { label: "Updated"; value: root.updated; }
+                    if root.detail != "": Field { label: "Detail"; value: root.detail; }
                 }
             }
-        }
 
-        // Divider.
-        Rectangle {
-            height: 1px;
-            background: #4d74a6;
-        }
-
-        // Detail rows.
-        VerticalLayout {
-            spacing: 2px;
-            vertical-stretch: 1;
-            Field { label: "Session"; value: root.session; }
-            Field { label: "Outer (TEAP tunnel)"; value: root.outer; }
-            Field { label: "Inner (EAP-TLS)"; value: root.inner; }
-            // Certificate: full distinguished name, wrapped.
+            // Both credentials: the computer (machine) cert and the user cert.
             VerticalLayout {
-                spacing: 2px;
-                Text {
-                    text: "Certificate:";
-                    color: #c2d4ea;
-                    font-size: 13px;
+                spacing: 14px;
+                vertical-stretch: 1;
+                CertBlock {
+                    caption: "Computer certificate";
+                    subject: root.machine-cert;
+                    available: root.has-machine-cert;
+                    view => {
+                        root.view-computer-cert();
+                    }
                 }
-                Text {
-                    text: root.certificate;
-                    color: white;
-                    font-size: 13px;
-                    font-weight: 600;
-                    wrap: word-wrap;
-                }
-            }
-            Field { label: "Server"; value: root.server; }
-            Field { label: "Updated"; value: root.updated; }
-            if root.detail != "": Field { label: "Detail"; value: root.detail; }
-        }
-
-        // Actions.
-        HorizontalLayout {
-            alignment: end;
-            Button {
-                text: "View Certificate…";
-                enabled: root.has-cert;
-                clicked => {
-                    root.view-certificate();
+                CertBlock {
+                    caption: "User certificate";
+                    subject: root.user-cert;
+                    available: root.has-user-cert;
+                    view => {
+                        root.view-user-cert();
+                    }
                 }
             }
         }

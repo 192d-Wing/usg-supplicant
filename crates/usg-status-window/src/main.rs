@@ -29,6 +29,11 @@ mod app {
 
     pub fn run() -> Result<(), slint::PlatformError> {
         let ui = MainWindow::new()?;
+        if let Some(path) = logo_path()
+            && let Ok(img) = slint::Image::load_from_path(&path)
+        {
+            ui.set_logo(img);
+        }
         if let Some(path) = seal_path()
             && let Ok(img) = slint::Image::load_from_path(&path)
         {
@@ -36,10 +41,16 @@ mod app {
         }
         apply(&ui, read_status().as_ref());
 
-        // "View Certificate…": open the in-use cert from the current published status.
-        ui.on_view_certificate(|| {
+        // Per-cert "View…": open the machine/user cert from the current published
+        // status in its respective Windows store.
+        ui.on_view_computer_cert(|| {
             if let Some(s) = read_status() {
-                crate::cert::view(s.identity, &s.cert_subject);
+                crate::cert::view(usg_status::Identity::Machine, &s.machine_cert);
+            }
+        });
+        ui.on_view_user_cert(|| {
+            if let Some(s) = read_status() {
+                crate::cert::view(usg_status::Identity::User, &s.user_cert);
             }
         });
 
@@ -64,7 +75,8 @@ mod app {
                 MainWindow::set_session,
                 MainWindow::set_outer,
                 MainWindow::set_inner,
-                MainWindow::set_certificate,
+                MainWindow::set_machine_cert,
+                MainWindow::set_user_cert,
                 MainWindow::set_server,
                 MainWindow::set_updated,
             ] {
@@ -72,7 +84,8 @@ mod app {
             }
             ui.set_detail("".into());
             ui.set_indicator(0);
-            ui.set_has_cert(false);
+            ui.set_has_machine_cert(false);
+            ui.set_has_user_cert(false);
             return;
         };
         let (outer, inner) = s.state.outer_inner();
@@ -80,12 +93,14 @@ mod app {
         ui.set_session(s.identity.display_name().into());
         ui.set_outer(outer.into());
         ui.set_inner(inner.into());
-        ui.set_certificate(dash(&s.cert_subject).into());
+        ui.set_machine_cert(dash(&s.machine_cert).into());
+        ui.set_user_cert(dash(&s.user_cert).into());
         ui.set_server(dash(&s.server_name).into());
         ui.set_detail(s.detail.clone().into());
         ui.set_updated(updated_label(s.updated_unix).into());
         ui.set_indicator(indicator(s.state));
-        ui.set_has_cert(!s.cert_subject.is_empty());
+        ui.set_has_machine_cert(!s.machine_cert.is_empty());
+        ui.set_has_user_cert(!s.user_cert.is_empty());
     }
 
     /// 0 idle/unknown · 1 in-progress · 2 authenticated · 3 failed — matches the
@@ -115,7 +130,29 @@ mod app {
         }
     }
 
-    /// First existing seal candidate (same search order as the tray's `gfx`).
+    /// First existing header-logo candidate. The light logo variant is used because
+    /// the window background (`#355e93`) is dark.
+    fn logo_path() -> Option<PathBuf> {
+        logo_candidates().into_iter().find(|p| p.is_file())
+    }
+
+    fn logo_candidates() -> Vec<PathBuf> {
+        let mut out = Vec::new();
+        if let Some(pd) = std::env::var_os("ProgramData") {
+            let base = PathBuf::from(pd).join("usg-supplicant");
+            out.push(base.join("logo.png"));
+            out.push(base.join("DOW-Logo-Light.png"));
+        }
+        if let Ok(exe) = std::env::current_exe()
+            && let Some(dir) = exe.parent()
+        {
+            out.push(dir.join("icons").join("DOW-Logo-Light.png"));
+        }
+        out.push(PathBuf::from("icons").join("DOW-Logo-Light.png"));
+        out
+    }
+
+    /// First existing seal candidate, used as the window's title-bar icon.
     fn seal_path() -> Option<PathBuf> {
         seal_candidates().into_iter().find(|p| p.is_file())
     }

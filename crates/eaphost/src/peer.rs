@@ -98,10 +98,22 @@ fn status_meta() -> &'static Mutex<HashMap<u64, StatusMeta>> {
 fn publish_status(handle: u64, state: usg_status::AuthState, detail: &str) {
     let map = status_meta().lock().unwrap_or_else(PoisonError::into_inner);
     if let Some(meta) = map.get(&handle) {
+        // Preserve the *other* identity's cert from the previously published status,
+        // so the window can show the machine and user certs together even though one
+        // session runs at a time.
+        let (mut machine_cert, mut user_cert) = usg_status::read_status()
+            .map(|p| (p.machine_cert, p.user_cert))
+            .unwrap_or_default();
+        match meta.identity {
+            usg_status::Identity::Machine => machine_cert.clone_from(&meta.cert_subject),
+            usg_status::Identity::User => user_cert.clone_from(&meta.cert_subject),
+        }
         let _ = usg_status::write_status(&usg_status::AuthStatus {
             state,
             identity: meta.identity,
             cert_subject: meta.cert_subject.clone(),
+            machine_cert,
+            user_cert,
             server_name: meta.server_name.clone(),
             detail: detail.to_string(),
             updated_unix: usg_status::unix_now(),
