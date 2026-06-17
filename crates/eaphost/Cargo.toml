@@ -38,6 +38,11 @@ windows = { version = "0.62", features = [
     # EapPeerMethodOutput/Result, EAP_ERROR, EAP_ATTRIBUTES.
     "Win32_Security_ExtensibleAuthenticationProtocol",
     "Win32_Security_Cryptography",
+    # Harden the %ProgramData% status-directory ACL (status assessment H1/M1):
+    # CreateDirectoryW + a protected security descriptor from SDDL.
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
     # LoadLibrary/GetProcAddress for the self-hosted DLL-loading test.
     "Win32_System_LibraryLoader",
     # LocalAlloc for EapPeerGetIdentity's identity string (EAPHost LocalFrees it).
