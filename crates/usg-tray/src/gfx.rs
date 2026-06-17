@@ -170,25 +170,7 @@ pub fn make_tray_icon(state: AuthState) -> HICON {
         }
         let mut g: *mut GpGraphics = std::ptr::null_mut();
         if GdipGetImageGraphicsContext(bmp.cast(), &mut g).0 == 0 {
-            let _ = GdipSetSmoothingMode(g, SmoothingModeAntiAlias);
-
-            // Key (behind the lock, lower-right): round bow + stem + two teeth.
-            stroke_ellipse(g, METAL, 19, 17, 9, 9, 3.0);
-            stroke_line(g, METAL, 26, 24, 30, 28, 3.0);
-            stroke_line(g, METAL, 28, 26, 26, 28, 2.0);
-            stroke_line(g, METAL, 30, 28, 28, 30, 2.0);
-
-            // Padlock shackle: an open U above the body.
-            stroke_arc(g, METAL, 6, 3, 14, 16, 180.0, 180.0, 3.0);
-            stroke_line(g, METAL, 6, 11, 6, 16, 3.0);
-            stroke_line(g, METAL, 20, 11, 20, 16, 3.0);
-
-            // Padlock body.
-            fill_rect(g, body, 4, 15, 18, 14);
-            // Keyhole.
-            fill_circle(g, HOLE, 11, 19, 4);
-            fill_rect(g, HOLE, 12, 21, 2, 5);
-
+            draw_lock_and_key(g, body, METAL, HOLE);
             let _ = GdipDeleteGraphics(g);
         }
         let mut icon = HICON::default();
@@ -196,6 +178,30 @@ pub fn make_tray_icon(state: AuthState) -> HICON {
         let _ = GdipDisposeImage(bmp.cast());
         icon
     }
+}
+
+/// Paint a bold padlock (left) and a separate key (right) onto `g` (a 32×32 canvas),
+/// kept simple and chunky so both read at 16 px tray size. `body` colors the lock.
+///
+/// # Safety
+/// `g` must be a valid `GpGraphics`.
+unsafe fn draw_lock_and_key(g: *mut GpGraphics, body: u32, metal: u32, hole: u32) {
+    let _ = GdipSetSmoothingMode(g, SmoothingModeAntiAlias);
+
+    // Padlock (left). Shackle: a top arch with two legs into the body.
+    stroke_arc(g, metal, 4, 4, 11, 13, 180.0, 180.0, 3.0);
+    stroke_line(g, metal, 4, 10, 4, 15, 3.0);
+    stroke_line(g, metal, 15, 10, 15, 15, 3.0);
+    // Body + keyhole.
+    fill_rect(g, body, 2, 14, 15, 15);
+    fill_circle(g, hole, 7, 18, 5);
+    fill_rect(g, hole, 9, 21, 2, 5);
+
+    // Key (right): round bow at top, a stem down, and two teeth.
+    stroke_ellipse(g, metal, 21, 3, 9, 9, 3.0);
+    stroke_line(g, metal, 25, 12, 25, 29, 3.0);
+    stroke_line(g, metal, 25, 23, 30, 23, 3.0);
+    stroke_line(g, metal, 25, 28, 29, 28, 3.0);
 }
 
 unsafe fn fill_rect(g: *mut GpGraphics, argb: u32, x: i32, y: i32, w: i32, h: i32) {
@@ -254,6 +260,27 @@ unsafe fn fill_circle(g: *mut GpGraphics, argb: u32, x: i32, y: i32, d: i32) {
     if GdipCreateSolidFill(argb, &mut brush).0 == 0 {
         let _ = GdipFillEllipseI(g, brush.cast(), x, y, d, d);
         let _ = GdipDeleteBrush(brush.cast());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use windows::Win32::UI::WindowsAndMessaging::DestroyIcon;
+
+    #[test]
+    fn tray_icon_builds_non_null() {
+        startup();
+        let icon = make_tray_icon(AuthState::Authenticated);
+        let built = !icon.0.is_null();
+        if built {
+            // SAFETY: an icon we own from GdipCreateHICONFromBitmap.
+            unsafe {
+                let _ = DestroyIcon(icon);
+            }
+        }
+        shutdown();
+        assert!(built, "GdipCreateHICONFromBitmap returned a null HICON");
     }
 }
 

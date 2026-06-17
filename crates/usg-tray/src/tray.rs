@@ -78,11 +78,14 @@ pub fn run() {
             return;
         };
 
+        // Start GDI+ (and load the seal) BEFORE building the first icon: the tray
+        // icon is drawn with GDI+, so it must be initialized or the first icon fails
+        // to render and a stock-icon fallback gets cached for that state.
+        crate::gfx::startup();
         let mut nid = base_nid(hwnd);
         let status = read_status();
         refresh(&mut nid, status.as_ref());
         let _ = Shell_NotifyIconW(NIM_ADD, &nid);
-        crate::gfx::startup();
         // Seed the last-seen state so a stale persisted status (e.g. yesterday's
         // result) doesn't pop a toast on startup — only genuine in-session changes do.
         LAST_STATE.with(|l| *l.borrow_mut() = status.as_ref().map(|s| s.state));
