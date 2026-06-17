@@ -181,17 +181,41 @@ pub fn unix_now() -> u64 {
         .map_or(0, |d| d.as_secs())
 }
 
-/// The status file path: `%ProgramData%\usg-supplicant\status` on Windows (a
-/// location Local System can write and interactive users can read), falling back
-/// to the temp dir when `ProgramData` is unset (dev / non-Windows tests).
+/// The status file path: `%ProgramData%\usg-supplicant\status` on Windows.
+///
+/// `ProgramData` is a fixed system location Local System can write and interactive
+/// users can read. On Windows we **don't** fall back to a temp dir if the variable
+/// is somehow unset — the Local System writer and the user-session reader must
+/// resolve the *same* path, and per-identity temp dirs diverge. Non-Windows
+/// (dev/tests) uses the temp dir, where writer and reader share one environment.
 #[must_use]
 pub fn status_file_path() -> PathBuf {
-    let base = std::env::var_os("ProgramData").map_or_else(std::env::temp_dir, PathBuf::from);
-    base.join("usg-supplicant").join("status")
+    let dir = {
+        #[cfg(windows)]
+        {
+            std::env::var_os("ProgramData")
+                .map_or_else(|| PathBuf::from(r"C:\ProgramData"), PathBuf::from)
+        }
+        #[cfg(not(windows))]
+        {
+            std::env::temp_dir()
+        }
+    };
+    dir.join("usg-supplicant").join("status")
+}
+
+/// A process- and call-unique staging name, so concurrent writers never clobber a
+/// shared temp file before its atomic rename.
+fn unique_tmp(path: &std::path::Path) -> PathBuf {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+    path.with_extension(format!("{}.{seq}.tmp", std::process::id()))
 }
 
 /// Publish `status` to [`status_file_path`], creating the directory and writing
-/// atomically (temp file + rename) so a poller never reads a half-written file.
+/// atomically (unique temp file + rename) so a poller never reads a half-written
+/// file and concurrent sessions don't clobber each other's staging file.
 ///
 /// # Errors
 /// Any filesystem error creating the directory or writing/renaming the file.
@@ -200,7 +224,7 @@ pub fn write_status(status: &AuthStatus) -> std::io::Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    let tmp = path.with_extension("tmp");
+    let tmp = unique_tmp(&path);
     std::fs::write(&tmp, status.encode())?;
     std::fs::rename(&tmp, &path)
 }

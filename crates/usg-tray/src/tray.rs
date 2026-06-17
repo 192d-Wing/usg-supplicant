@@ -68,9 +68,16 @@ pub fn run() {
         SetTimer(Some(hwnd), TIMER_ID, POLL_MS, None);
 
         let mut msg = MSG::default();
-        while GetMessageW(&mut msg, None, 0, 0).as_bool() {
-            let _ = TranslateMessage(&msg);
-            DispatchMessageW(&msg);
+        // GetMessageW returns -1 on error (not 0): handle it explicitly so an error
+        // doesn't spin the loop forever re-dispatching a stale message.
+        loop {
+            match GetMessageW(&mut msg, None, 0, 0).0 {
+                0 | -1 => break, // WM_QUIT or error
+                _ => {
+                    let _ = TranslateMessage(&msg);
+                    DispatchMessageW(&msg);
+                }
+            }
         }
     }
 }

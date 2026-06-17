@@ -530,21 +530,17 @@ extern "system" fn EapPeerProcessRequestPacket(
     let Some(action) = registry().process(handle, eap) else {
         return E_FAIL; // unknown handle -> fail closed
     };
-    // Publish the new phase for the tray: outer handshaking, the inner EAP-TLS
-    // once the tunnel is up, or the terminal verdict.
-    match action {
-        ProcessAction::Respond => {
-            let state = if registry().tunnel_established(handle) == Some(true) {
-                usg_status::AuthState::InnerInProgress
-            } else {
-                usg_status::AuthState::Connecting
-            };
-            publish_status(handle, state, "");
-        }
-        ProcessAction::Finished => {
-            let (state, detail) = terminal_status(registry().result(handle).as_ref());
-            publish_status(handle, state, &detail);
-        }
+    // Publish the in-progress phase for the tray: outer handshaking, or the inner
+    // EAP-TLS once the tunnel is up. The terminal verdict is published by
+    // `EapPeerGetResult` (always called after a Finished step), which reads the
+    // result once — so we don't re-read it under a second lock here.
+    if action == ProcessAction::Respond {
+        let state = if registry().tunnel_established(handle) == Some(true) {
+            usg_status::AuthState::InnerInProgress
+        } else {
+            usg_status::AuthState::Connecting
+        };
+        publish_status(handle, state, "");
     }
     let response_action = match action {
         ProcessAction::Respond => EapPeerMethodResponseActionSend,
