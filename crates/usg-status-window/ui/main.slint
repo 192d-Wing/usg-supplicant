@@ -1,0 +1,118 @@
+import { Spinner } from "std-widgets.slint";
+
+// One "Label: value" detail row.
+component Field inherits Rectangle {
+    in property <string> label;
+    in property <string> value;
+    height: 26px;
+    HorizontalLayout {
+        spacing: 10px;
+        Text {
+            text: root.label;
+            color: #c2d4ea;
+            font-size: 13px;
+            width: 168px;
+            horizontal-alignment: left;
+            vertical-alignment: center;
+        }
+        Text {
+            text: root.value;
+            color: white;
+            font-size: 13px;
+            font-weight: 600;
+            overflow: elide;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+        }
+    }
+}
+
+export component MainWindow inherits Window {
+    title: "USG Supplicant — Authentication Status";
+    width: 520px;
+    height: 360px;
+    background: #355e93;
+    icon: root.seal;
+
+    // Set from Rust on a poll timer.
+    in property <image> seal;
+    in property <string> headline: "—";
+    in property <string> session: "—";
+    in property <string> outer: "—";
+    in property <string> inner: "—";
+    in property <string> certificate: "—";
+    in property <string> server: "—";
+    in property <string> detail: "";
+    in property <string> updated: "—";
+    // 0 idle/unknown · 1 in-progress · 2 authenticated · 3 failed
+    in property <int> indicator: 0;
+
+    VerticalLayout {
+        padding: 24px;
+        spacing: 16px;
+
+        // Header: seal, headline, status indicator.
+        HorizontalLayout {
+            spacing: 16px;
+            Image {
+                source: root.seal;
+                image-fit: contain;
+                width: 88px;
+                height: 88px;
+            }
+            VerticalLayout {
+                alignment: center;
+                horizontal-stretch: 1;
+                Text {
+                    text: root.headline;
+                    color: white;
+                    font-size: 24px;
+                    font-weight: 700;
+                    overflow: elide;
+                }
+                Text {
+                    text: "TEAP · EAP-TLS";
+                    color: #9fb7d6;
+                    font-size: 13px;
+                }
+            }
+            // Status indicator: spinner while in progress, colored disc otherwise.
+            Rectangle {
+                width: 44px;
+                height: 44px;
+                if root.indicator == 1: Spinner {
+                    width: 40px;
+                    height: 40px;
+                    indeterminate: true;
+                }
+                if root.indicator != 1: Rectangle {
+                    width: 28px;
+                    height: 28px;
+                    border-radius: 14px;
+                    background: root.indicator == 2 ? #43a047
+                        : root.indicator == 3 ? #e53935
+                        : #8a8a8a;
+                }
+            }
+        }
+
+        // Divider.
+        Rectangle {
+            height: 1px;
+            background: #4d74a6;
+        }
+
+        // Detail rows.
+        VerticalLayout {
+            spacing: 2px;
+            vertical-stretch: 1;
+            Field { label: "Session"; value: root.session; }
+            Field { label: "Outer (TEAP tunnel)"; value: root.outer; }
+            Field { label: "Inner (EAP-TLS)"; value: root.inner; }
+            Field { label: "Certificate"; value: root.certificate; }
+            Field { label: "Server"; value: root.server; }
+            Field { label: "Updated"; value: root.updated; }
+            if root.detail != "": Field { label: "Detail"; value: root.detail; }
+        }
+    }
+}

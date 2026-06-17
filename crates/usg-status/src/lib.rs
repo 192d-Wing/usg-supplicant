@@ -96,6 +96,31 @@ impl AuthState {
             Self::Failed => "Authentication failed",
         }
     }
+
+    /// Short bold headline for a toast / window title line.
+    #[must_use]
+    pub fn headline(self) -> &'static str {
+        match self {
+            Self::Authenticated => "Authenticated",
+            Self::Failed => "Authentication failed",
+            Self::Idle => "usg-TEAP",
+            Self::Connecting | Self::OuterEstablished | Self::InnerInProgress => "Authenticating…",
+        }
+    }
+
+    /// `(outer, inner)` phase words derived from the coarse state, for the two-line
+    /// outer-tunnel / inner-EAP summary shown in the menu, toast, and window.
+    #[must_use]
+    pub fn outer_inner(self) -> (&'static str, &'static str) {
+        match self {
+            Self::Idle => ("—", "—"),
+            Self::Connecting => ("in progress", "waiting"),
+            Self::OuterEstablished => ("established", "waiting"),
+            Self::InnerInProgress => ("established", "in progress"),
+            Self::Authenticated => ("established", "authenticated"),
+            Self::Failed => ("see detail", "see detail"),
+        }
+    }
 }
 
 impl Identity {
@@ -115,6 +140,21 @@ impl Identity {
             _ => None,
         }
     }
+
+    /// "Machine" / "User" label for the session identity.
+    #[must_use]
+    pub fn display_name(self) -> &'static str {
+        match self {
+            Self::Machine => "Machine",
+            Self::User => "User",
+        }
+    }
+}
+
+/// `v`, or an em dash when it's empty — for rendering possibly-empty status fields.
+#[must_use]
+pub fn dash(v: &str) -> &str {
+    if v.is_empty() { "—" } else { v }
 }
 
 fn one_line(s: &str) -> String {
@@ -273,6 +313,18 @@ mod tests {
         assert_eq!(AuthStatus::decode("identity=machine\n"), None);
         assert_eq!(AuthStatus::decode("state=idle\n"), None);
         assert_eq!(AuthStatus::decode("state=bogus\nidentity=machine\n"), None);
+    }
+
+    #[test]
+    fn presentation_helpers() {
+        assert_eq!(Identity::Machine.display_name(), "Machine");
+        assert_eq!(AuthState::Authenticated.headline(), "Authenticated");
+        assert_eq!(
+            AuthState::InnerInProgress.outer_inner(),
+            ("established", "in progress")
+        );
+        assert_eq!(dash(""), "—");
+        assert_eq!(dash("CN=host"), "CN=host");
     }
 
     #[test]

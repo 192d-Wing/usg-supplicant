@@ -21,12 +21,16 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::{PCWSTR, w};
 
 use std::cell::RefCell;
+use std::path::PathBuf;
+use std::process::{Child, Command};
 
-use usg_status::{AuthState, AuthStatus, read_status};
+use usg_status::{AuthState, AuthStatus, dash, read_status};
 
 thread_local! {
     /// The last published state we showed, to fire a toast only on changes.
     static LAST_STATE: RefCell<Option<AuthState>> = const { RefCell::new(None) };
+    /// The spawned status-window process, so repeated clicks don't open duplicates.
+    static STATUS_WIN: RefCell<Option<Child>> = const { RefCell::new(None) };
 }
 
 /// Tray-icon callback message (`uCallbackMessage`).
@@ -143,7 +147,7 @@ fn tooltip(status: Option<&AuthStatus>) -> String {
         Some(s) => format!(
             "usg-TEAP — {} ({})",
             s.state.label(),
-            crate::text::identity_label(s.identity)
+            s.identity.display_name()
         ),
     }
 }
@@ -153,13 +157,13 @@ fn menu_lines(status: Option<&AuthStatus>) -> Vec<String> {
     let Some(s) = status else {
         return vec!["No authentication status yet".to_string()];
     };
-    let (outer, inner) = crate::text::outer_inner(s.state);
+    let (outer, inner) = s.state.outer_inner();
     let mut lines = vec![
-        format!("Session: {}", crate::text::identity_label(s.identity)),
+        format!("Session: {}", s.identity.display_name()),
         format!("Outer (TEAP tunnel): {outer}"),
         format!("Inner (EAP-TLS): {inner}"),
-        format!("Certificate: {}", crate::text::dash(&s.cert_subject)),
-        format!("Server: {}", crate::text::dash(&s.server_name)),
+        format!("Certificate: {}", dash(&s.cert_subject)),
+        format!("Server: {}", dash(&s.server_name)),
     ];
     if !s.detail.is_empty() {
         lines.push(format!("Detail: {}", s.detail));
@@ -169,6 +173,33 @@ fn menu_lines(status: Option<&AuthStatus>) -> Vec<String> {
 
 fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+/// Open the modern (Slint) status window — a separate process, since Slint runs its
+/// own event loop and can't share this tray's Win32 message loop. If a window we
+/// launched is still open, leave it alone instead of spawning a duplicate.
+fn open_status_window() {
+    STATUS_WIN.with(|c| {
+        let mut slot = c.borrow_mut();
+        if let Some(child) = slot.as_mut() {
+            match child.try_wait() {
+                Ok(None) => return, // still running — don't open a second one
+                _ => *slot = None,  // exited or errored — fall through and respawn
+            }
+        }
+        if let Some(path) = status_window_path()
+            && let Ok(child) = Command::new(path).spawn()
+        {
+            *slot = Some(child);
+        }
+    });
+}
+
+/// Path to `usg-status-window.exe`, expected alongside the tray executable.
+fn status_window_path() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let cand = exe.parent()?.join("usg-status-window.exe");
+    cand.is_file().then_some(cand)
 }
 
 /// Build and show the right-click status menu at the cursor.
@@ -242,7 +273,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         }
         WM_COMMAND => {
             match wparam.0 & 0xFFFF {
-                ID_STATUS => crate::window::open(),
+                ID_STATUS => open_status_window(),
                 ID_EXIT => {
                     let _ = Shell_NotifyIconW(NIM_DELETE, &base_nid(hwnd));
                     let _ = DestroyWindow(hwnd);
