@@ -22,11 +22,19 @@ Windows supplicant). For the day-to-day Windows build/runbook see
 - **Provisioning tooling** — `eaphost::profile` (LAN/`EapHostConfig` XML builders)
   and the `usg-eaphost` CLI (`emit-config`/`emit-profile`/`register`/`unregister`/
   `install-profile`). See `WINDOWS_DEV.md` §4.6.
-- **Status tray UI** — the peer method publishes a coarse `AuthStatus` (outer/inner
-  state, identity, cert subject, server) to `%ProgramData%\usg-supplicant\status`
-  via the `usg-status` crate; the `usg-tray` Windows app (Shell_NotifyIcon + menu,
-  raw Win32, no new deps) polls and displays it. Validated end-to-end (a full
-  session ends the file at `state=authenticated` with the cert subject).
+- **Status UI (tray + window)** — the peer method publishes a coarse `AuthStatus`
+  (outer/inner state, identity, the machine **and** user cert subjects + their
+  SHA-256 thumbprints, server) to `%ProgramData%\usg-supplicant\status` via the
+  `usg-status` crate, preserving both credentials across the one-at-a-time
+  machine/user sessions. The `usg-tray` app (raw Win32, no new deps) polls and shows
+  a state-colored **lock-and-key** tray icon, a right-click status menu, and an
+  animated **toast** (DoD seal + green/spinner/red indicator, auto-dismiss). A
+  right-click **"Status window…"** launches `usg-status-window` — a modern **Slint**
+  GUI (DoW logo header, seal title-bar icon, centered status) that shows the
+  **computer and user certificates** together, each with a **"View…"** button that
+  opens the *exact* cert (matched by SHA-256 thumbprint, subject-CN fallback) in the
+  Windows certificate dialog. Validated end-to-end (a full session ends the file at
+  `state=authenticated` with the cert subject).
 - **CNG/smartcard credentials** and the **OS FIPS-policy gate**, validated on
   hardware.
 
