@@ -74,9 +74,9 @@ fn try_view_by_thumbprint(identity: Identity, thumbprint: &str) -> Option<()> {
         let mut ctx = CertFindCertificateInStore(store, enc, 0, CERT_FIND_ANY, None, None);
         while !ctx.is_null() {
             if cert_sha256_hex(ctx) == want {
-                let der =
-                    std::slice::from_raw_parts((*ctx).pbCertEncoded, (*ctx).cbCertEncoded as usize);
-                found = write_and_open(identity, der);
+                if let Some(der) = cert_der(ctx) {
+                    found = write_and_open(identity, der);
+                }
                 let _ = CertFreeCertificateContext(Some(ctx));
                 break;
             }
@@ -111,15 +111,28 @@ fn try_view_by_subject(identity: Identity, subject: &str) -> Option<()> {
         let result = if ctx.is_null() {
             None
         } else {
-            let der =
-                std::slice::from_raw_parts((*ctx).pbCertEncoded, (*ctx).cbCertEncoded as usize);
-            let opened = write_and_open(identity, der);
+            let opened = cert_der(ctx).and_then(|der| write_and_open(identity, der));
             let _ = CertFreeCertificateContext(Some(ctx));
             opened
         };
         let _ = CertCloseStore(Some(store), 0);
         result
     }
+}
+
+/// The DER bytes of a cert context as a slice, or `None` if the store returned a
+/// null pointer or zero length (defense-in-depth before forming a raw slice).
+///
+/// # Safety
+/// `ctx` must be a valid cert context; the returned slice must not outlive it.
+unsafe fn cert_der<'a>(ctx: *const CERT_CONTEXT) -> Option<&'a [u8]> {
+    // SAFETY: `ctx` is a valid cert context per the caller.
+    let (ptr, len) = unsafe { ((*ctx).pbCertEncoded, (*ctx).cbCertEncoded as usize) };
+    if ptr.is_null() || len == 0 {
+        return None;
+    }
+    // SAFETY: `ptr` points to `len` bytes of DER owned by the cert context.
+    Some(unsafe { std::slice::from_raw_parts(ptr, len) })
 }
 
 /// The Windows-computed SHA-256 hash of a cert context, as uppercase hex (or empty).

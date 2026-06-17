@@ -29,6 +29,9 @@ const MAX_TLS_MESSAGE: usize = 256 * 1024;
 /// Cap on handshake flights, bounding a server that never completes the
 /// handshake (defense-in-depth above rustls's own limits).
 const MAX_HANDSHAKE_ROUNDS: usize = 64;
+/// Cap on Phase-2 (in-tunnel TLV) rounds, bounding a server that keeps the tunnel
+/// open without ever sending a terminal Result.
+const MAX_PHASE2_ROUNDS: usize = 64;
 
 /// Static driver configuration.
 #[derive(Debug, Clone)]
@@ -228,10 +231,15 @@ impl TeapDriver {
         .map_err(|_| DriverError::Protocol("session key seed rejected"))?;
         self.session = Some(session);
         self.phase = Phase::Phase2;
+        self.rounds = 0; // reuse the counter to bound Phase-2 rounds too.
         Ok(())
     }
 
     fn on_phase2(&mut self, outer: &TeapOuter) -> Result<DriverStep, DriverError> {
+        self.rounds = self.rounds.saturating_add(1);
+        if self.rounds > MAX_PHASE2_ROUNDS {
+            return Err(DriverError::Protocol("phase 2 exceeded round limit"));
+        }
         let Some(records) = self.reasm.push(outer)? else {
             return self.respond(&TeapOuter::ack(TEAP_VERSION));
         };
