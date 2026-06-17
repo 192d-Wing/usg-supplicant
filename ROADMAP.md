@@ -22,6 +22,11 @@ Windows supplicant). For the day-to-day Windows build/runbook see
 - **Provisioning tooling** — `eaphost::profile` (LAN/`EapHostConfig` XML builders)
   and the `usg-eaphost` CLI (`emit-config`/`emit-profile`/`register`/`unregister`/
   `install-profile`). See `WINDOWS_DEV.md` §4.6.
+- **Status tray UI** — the peer method publishes a coarse `AuthStatus` (outer/inner
+  state, identity, cert subject, server) to `%ProgramData%\usg-supplicant\status`
+  via the `usg-status` crate; the `usg-tray` Windows app (Shell_NotifyIcon + menu,
+  raw Win32, no new deps) polls and displays it. Validated end-to-end (a full
+  session ends the file at `state=authenticated` with the cert subject).
 - **CNG/smartcard credentials** and the **OS FIPS-policy gate**, validated on
   hardware.
 
@@ -81,12 +86,6 @@ hypothesis without a full RADIUS lab.
 
 ## Other open items
 
-- **Status tray UI** — a Windows system-tray icon + small window showing the live
-  authentication status (outer TEAP tunnel and inner EAP-TLS) and which client
-  certificate is in use. Needs a status channel out of the EAPHost peer method
-  (which runs in the `EAPHost` service as Local System) to a per-user tray app —
-  e.g. the method publishes outer/inner phase + selector/cert subject, and the
-  tray reads it. *(In progress.)*
 - **Outer EAP-TLS over RSA on real DoD PKI** — inner EAP-TLS RSA is done; revisit
   the outer tunnel's RSA path against real CAC/DoD certs (the "reattack outer"
   follow-up).
