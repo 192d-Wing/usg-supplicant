@@ -36,6 +36,8 @@ const TRAY_UID: u32 = 1;
 /// Status-poll timer id and interval (ms).
 const TIMER_ID: usize = 1;
 const POLL_MS: u32 = 1500;
+/// "Status window" menu-item command id.
+const ID_STATUS: usize = 0xE71C;
 /// "Exit" menu-item command id.
 const ID_EXIT: usize = 0xE71D;
 
@@ -70,9 +72,13 @@ pub fn run() {
         };
 
         let mut nid = base_nid(hwnd);
-        refresh(&mut nid);
+        let status = read_status();
+        refresh(&mut nid, status.as_ref());
         let _ = Shell_NotifyIconW(NIM_ADD, &nid);
-        crate::toast::startup();
+        crate::gfx::startup();
+        // Seed the last-seen state so a stale persisted status (e.g. yesterday's
+        // result) doesn't pop a toast on startup — only genuine in-session changes do.
+        LAST_STATE.with(|l| *l.borrow_mut() = status.as_ref().map(|s| s.state));
         SetTimer(Some(hwnd), TIMER_ID, POLL_MS, None);
 
         let mut msg = MSG::default();
@@ -87,7 +93,7 @@ pub fn run() {
                 }
             }
         }
-        crate::toast::shutdown();
+        crate::gfx::shutdown();
     }
 }
 
@@ -103,11 +109,10 @@ fn base_nid(hwnd: HWND) -> NOTIFYICONDATAW {
     }
 }
 
-/// Refresh `nid`'s icon + tooltip from the currently published status.
-fn refresh(nid: &mut NOTIFYICONDATAW) {
-    let status = read_status();
-    nid.hIcon = icon_for(status.as_ref().map(|s| s.state));
-    set_tip(nid, &tooltip(status.as_ref()));
+/// Refresh `nid`'s icon + tooltip from `status` (a single read by the caller).
+fn refresh(nid: &mut NOTIFYICONDATAW, status: Option<&AuthStatus>) {
+    nid.hIcon = icon_for(status.map(|s| s.state));
+    set_tip(nid, &tooltip(status));
 }
 
 /// Copy `tip` (truncated, NUL-terminated) into the fixed `szTip` buffer.
@@ -205,6 +210,7 @@ fn show_menu(hwnd: HWND) {
             let _ = AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, PCWSTR(text.as_ptr()));
         }
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
+        let _ = AppendMenuW(menu, MF_STRING, ID_STATUS, w!("Status window…"));
         let _ = AppendMenuW(menu, MF_STRING, ID_EXIT, w!("Exit"));
 
         let mut pt = POINT::default();
@@ -242,14 +248,16 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             LRESULT(0)
         }
         WM_TIMER => {
+            let status = read_status();
             let mut nid = base_nid(hwnd);
-            refresh(&mut nid);
+            refresh(&mut nid, status.as_ref());
             let _ = Shell_NotifyIconW(NIM_MODIFY, &nid);
-            // Pop a toast when the published state changes.
-            let cur = read_status().map(|s| s.state);
+            // Pop a toast only on a genuine change to a present state (don't let a
+            // transient missing-file read overwrite the last state and re-fire).
+            let cur = status.as_ref().map(|s| s.state);
             LAST_STATE.with(|l| {
                 let mut last = l.borrow_mut();
-                if *last != cur {
+                if cur.is_some() && cur != *last {
                     if let Some(state) = cur {
                         crate::toast::notify(state);
                     }
@@ -259,9 +267,13 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             LRESULT(0)
         }
         WM_COMMAND => {
-            if (wparam.0 & 0xFFFF) == ID_EXIT {
-                let _ = Shell_NotifyIconW(NIM_DELETE, &base_nid(hwnd));
-                let _ = DestroyWindow(hwnd);
+            match wparam.0 & 0xFFFF {
+                ID_STATUS => crate::window::open(),
+                ID_EXIT => {
+                    let _ = Shell_NotifyIconW(NIM_DELETE, &base_nid(hwnd));
+                    let _ = DestroyWindow(hwnd);
+                }
+                _ => {}
             }
             LRESULT(0)
         }

@@ -4,13 +4,12 @@
 //! (failed), or a **spinning ring** (in progress). Bottom-right of the work area;
 //! terminal toasts auto-dismiss, an in-progress toast persists and animates.
 //!
-//! The seal is loaded (GDI+) from `%ProgramData%\usg-supplicant\seal.png`; if it's
-//! absent a placeholder disc is drawn. Replace that file with the official seal.
+//! GDI+ and the seal image come from [`crate::gfx`]; this module owns the popup
+//! window, its animation, and the card layout.
 #![allow(unsafe_op_in_unsafe_fn)] // pervasive Win32/GDI+ FFI in the window proc
 
 use std::cell::RefCell;
 use std::ffi::c_void;
-use std::path::PathBuf;
 
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
@@ -19,10 +18,8 @@ use windows::Win32::Graphics::Gdi::{
     HDC, InvalidateRect, PAINTSTRUCT, SRCCOPY, SelectObject, SetBkMode, SetTextColor, TRANSPARENT,
 };
 use windows::Win32::Graphics::GdiPlus::{
-    GdipCreateBitmapFromFile, GdipCreateFromHDC, GdipCreatePen1, GdipCreateSolidFill,
-    GdipDeleteBrush, GdipDeleteGraphics, GdipDeletePen, GdipDisposeImage, GdipDrawArcI,
-    GdipDrawImageRectI, GdipFillEllipseI, GdipSetSmoothingMode, GdiplusShutdown, GdiplusStartup,
-    GdiplusStartupInput, GpBitmap, GpGraphics, GpImage, SmoothingModeAntiAlias, Unit,
+    GdipCreateFromHDC, GdipDeleteGraphics, GdipDrawImageRectI, GdipSetSmoothingMode, GpGraphics,
+    SmoothingModeAntiAlias,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -32,7 +29,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WM_ERASEBKGND, WM_PAINT, WM_TIMER, WNDCLASSW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
     WS_EX_TOPMOST, WS_POPUP,
 };
-use windows::core::{PCWSTR, w};
+use windows::core::w;
 
 use usg_status::{AuthState, AuthStatus, read_status};
 
@@ -46,7 +43,6 @@ const AUTO_HIDE_TICKS: u32 = 83;
 /// Per-thread toast state (the message loop and toast live on one thread).
 struct Ctx {
     hwnd: HWND,
-    seal: *mut GpImage,
     state: AuthState,
     frame: u32,
     ticks: u32,
@@ -54,44 +50,14 @@ struct Ctx {
 
 thread_local! {
     static CTX: RefCell<Option<Ctx>> = const { RefCell::new(None) };
-    static TOKEN: RefCell<usize> = const { RefCell::new(0) };
-}
-
-/// Initialize GDI+. Call once before [`notify`].
-pub fn startup() {
-    // SAFETY: standard GDI+ init; token stored for shutdown.
-    unsafe {
-        let mut token = 0usize;
-        let input = GdiplusStartupInput {
-            GdiplusVersion: 1,
-            ..Default::default()
-        };
-        let _ = GdiplusStartup(&mut token, &input, std::ptr::null_mut());
-        TOKEN.with(|t| *t.borrow_mut() = token);
-    }
-}
-
-/// Dispose the seal image and shut GDI+ down.
-pub fn shutdown() {
-    // SAFETY: dispose what startup/ensure_window created.
-    unsafe {
-        CTX.with(|c| {
-            if let Some(ctx) = c.borrow_mut().take()
-                && !ctx.seal.is_null()
-            {
-                let _ = GdipDisposeImage(ctx.seal);
-            }
-        });
-        let token = TOKEN.with(|t| *t.borrow());
-        if token != 0 {
-            GdiplusShutdown(token);
-        }
-    }
 }
 
 /// Show (or refresh) the toast for `state`.
 pub fn notify(state: AuthState) {
     let hwnd = ensure_window();
+    if hwnd.0.is_null() {
+        return; // window creation failed; nothing to show (and don't arm a timer)
+    }
     CTX.with(|c| {
         if let Some(ctx) = c.borrow_mut().as_mut() {
             ctx.state = state;
@@ -148,11 +114,12 @@ fn ensure_window() -> HWND {
             None,
         )
         .unwrap_or_default();
-        let seal = load_seal();
+        if hwnd.0.is_null() {
+            return hwnd; // don't cache a null handle — leave CTX empty so we retry
+        }
         CTX.with(|c| {
             *c.borrow_mut() = Some(Ctx {
                 hwnd,
-                seal,
                 state: AuthState::Idle,
                 frame: 0,
                 ticks: 0,
@@ -160,47 +127,6 @@ fn ensure_window() -> HWND {
         });
         hwnd
     }
-}
-
-/// Load the DoD seal PNG (GDI+) from the first candidate that opens, or null.
-fn load_seal() -> *mut GpImage {
-    for path in seal_candidates() {
-        let wide: Vec<u16> = path
-            .to_string_lossy()
-            .encode_utf16()
-            .chain(std::iter::once(0))
-            .collect();
-        let mut bitmap: *mut GpBitmap = std::ptr::null_mut();
-        // SAFETY: GDI+ file load; on failure leaves `bitmap` null.
-        let img = unsafe {
-            if GdipCreateBitmapFromFile(PCWSTR(wide.as_ptr()), &mut bitmap).0 == 0 {
-                bitmap.cast::<GpImage>()
-            } else {
-                std::ptr::null_mut()
-            }
-        };
-        if !img.is_null() {
-            return img;
-        }
-    }
-    std::ptr::null_mut()
-}
-
-/// Where to look for the seal, in order: the deployed `%ProgramData%` copy, an
-/// `icons\DOW-Seal.png` next to the executable, then the same relative to the cwd
-/// (running from the repo).
-fn seal_candidates() -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    let mut programdata = usg_status::status_file_path();
-    programdata.set_file_name("seal.png");
-    out.push(programdata);
-    if let Ok(exe) = std::env::current_exe()
-        && let Some(dir) = exe.parent()
-    {
-        out.push(dir.join("icons").join("DOW-Seal.png"));
-    }
-    out.push(PathBuf::from("icons").join("DOW-Seal.png"));
-    out
 }
 
 unsafe extern "system" fn toast_proc(
@@ -245,12 +171,10 @@ unsafe extern "system" fn toast_proc(
 }
 
 fn paint(hwnd: HWND) {
-    let (state, seal, frame) = CTX.with(|c| {
+    let (state, frame) = CTX.with(|c| {
         c.borrow()
             .as_ref()
-            .map_or((AuthState::Idle, std::ptr::null_mut(), 0), |x| {
-                (x.state, x.seal, x.frame)
-            })
+            .map_or((AuthState::Idle, 0), |x| (x.state, x.frame))
     });
     let status = read_status();
     // SAFETY: BeginPaint, then draw to an off-screen buffer and blit it once, so
@@ -280,16 +204,17 @@ fn paint(hwnd: HWND) {
             draw_line(mem, line, 104, 44 + 20 * i32::try_from(i).unwrap_or(0));
         }
 
-        // Seal + indicator via GDI+.
+        // Seal + indicator via GDI+ (shared with the status window).
         let mut g: *mut GpGraphics = std::ptr::null_mut();
         if GdipCreateFromHDC(mem, &mut g).0 == 0 {
             let _ = GdipSetSmoothingMode(g, SmoothingModeAntiAlias);
+            let seal = crate::gfx::seal();
             if seal.is_null() {
-                fill_circle(g, 0xFF37_4A8B, 14, 14, 76); // placeholder disc
+                crate::gfx::draw_indicator(g, AuthState::Idle, 0, 14, 14, 76); // placeholder disc
             } else {
                 let _ = GdipDrawImageRectI(g, seal, 14, 14, 76, 76);
             }
-            draw_indicator(g, state, frame, W - 52, 18, 30);
+            crate::gfx::draw_indicator(g, state, frame, W - 52, 18, 30);
             let _ = GdipDeleteGraphics(g);
         }
 
@@ -348,38 +273,5 @@ fn draw_line(hdc: HDC, text: &str, x: i32, y: i32) {
             &mut rc,
             DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS,
         );
-    }
-}
-
-/// The right-hand status indicator: a filled bubble, or a spinning ring.
-unsafe fn draw_indicator(g: *mut GpGraphics, state: AuthState, frame: u32, x: i32, y: i32, d: i32) {
-    match state {
-        AuthState::Authenticated => fill_circle(g, 0xFF43_A047, x, y, d), // green
-        AuthState::Failed => fill_circle(g, 0xFFE5_3935, x, y, d),        // red
-        AuthState::Idle => fill_circle(g, 0xFF9E_9E9E, x, y, d),          // gray
-        _ => spinner(g, frame, x, y, d),                                  // in progress
-    }
-}
-
-unsafe fn fill_circle(g: *mut GpGraphics, argb: u32, x: i32, y: i32, d: i32) {
-    let mut brush = std::ptr::null_mut();
-    if GdipCreateSolidFill(argb, &mut brush).0 == 0 {
-        let _ = GdipFillEllipseI(g, brush.cast(), x, y, d, d);
-        let _ = GdipDeleteBrush(brush.cast());
-    }
-}
-
-unsafe fn spinner(g: *mut GpGraphics, frame: u32, x: i32, y: i32, d: i32) {
-    // Faint full track, then a bright rotating 90° arc.
-    let mut track = std::ptr::null_mut();
-    if GdipCreatePen1(0x3FFF_FFFF, 4.0, Unit(2), &mut track).0 == 0 {
-        let _ = GdipDrawArcI(g, track, x, y, d, d, 0.0, 360.0);
-        let _ = GdipDeletePen(track);
-    }
-    let start = (frame.wrapping_mul(20) % 360) as f32;
-    let mut arc = std::ptr::null_mut();
-    if GdipCreatePen1(0xFF42_A5F5, 4.0, Unit(2), &mut arc).0 == 0 {
-        let _ = GdipDrawArcI(g, arc, x, y, d, d, start, 90.0);
-        let _ = GdipDeletePen(arc);
     }
 }
