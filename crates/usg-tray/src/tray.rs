@@ -20,7 +20,14 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{PCWSTR, w};
 
-use usg_status::{AuthState, AuthStatus, Identity, read_status};
+use std::cell::RefCell;
+
+use usg_status::{AuthState, AuthStatus, read_status};
+
+thread_local! {
+    /// The last published state we showed, to fire a toast only on changes.
+    static LAST_STATE: RefCell<Option<AuthState>> = const { RefCell::new(None) };
+}
 
 /// Tray-icon callback message (`uCallbackMessage`).
 const WM_TRAY: u32 = WM_APP + 1;
@@ -29,6 +36,8 @@ const TRAY_UID: u32 = 1;
 /// Status-poll timer id and interval (ms).
 const TIMER_ID: usize = 1;
 const POLL_MS: u32 = 1500;
+/// "Status window" menu-item command id.
+const ID_STATUS: usize = 0xE71C;
 /// "Exit" menu-item command id.
 const ID_EXIT: usize = 0xE71D;
 
@@ -63,8 +72,13 @@ pub fn run() {
         };
 
         let mut nid = base_nid(hwnd);
-        refresh(&mut nid);
+        let status = read_status();
+        refresh(&mut nid, status.as_ref());
         let _ = Shell_NotifyIconW(NIM_ADD, &nid);
+        crate::gfx::startup();
+        // Seed the last-seen state so a stale persisted status (e.g. yesterday's
+        // result) doesn't pop a toast on startup — only genuine in-session changes do.
+        LAST_STATE.with(|l| *l.borrow_mut() = status.as_ref().map(|s| s.state));
         SetTimer(Some(hwnd), TIMER_ID, POLL_MS, None);
 
         let mut msg = MSG::default();
@@ -79,6 +93,7 @@ pub fn run() {
                 }
             }
         }
+        crate::gfx::shutdown();
     }
 }
 
@@ -94,11 +109,10 @@ fn base_nid(hwnd: HWND) -> NOTIFYICONDATAW {
     }
 }
 
-/// Refresh `nid`'s icon + tooltip from the currently published status.
-fn refresh(nid: &mut NOTIFYICONDATAW) {
-    let status = read_status();
-    nid.hIcon = icon_for(status.as_ref().map(|s| s.state));
-    set_tip(nid, &tooltip(status.as_ref()));
+/// Refresh `nid`'s icon + tooltip from `status` (a single read by the caller).
+fn refresh(nid: &mut NOTIFYICONDATAW, status: Option<&AuthStatus>) {
+    nid.hIcon = icon_for(status.map(|s| s.state));
+    set_tip(nid, &tooltip(status));
 }
 
 /// Copy `tip` (truncated, NUL-terminated) into the fixed `szTip` buffer.
@@ -123,32 +137,13 @@ fn icon_for(state: Option<AuthState>) -> HICON {
     unsafe { LoadIconW(None, id) }.unwrap_or_default()
 }
 
-fn identity_label(identity: Identity) -> &'static str {
-    match identity {
-        Identity::Machine => "Machine",
-        Identity::User => "User",
-    }
-}
-
-/// `(outer, inner)` status words derived from the coarse state.
-fn outer_inner(state: AuthState) -> (&'static str, &'static str) {
-    match state {
-        AuthState::Idle => ("—", "—"),
-        AuthState::Connecting => ("in progress", "waiting"),
-        AuthState::OuterEstablished => ("established", "waiting"),
-        AuthState::InnerInProgress => ("established", "in progress"),
-        AuthState::Authenticated => ("established", "authenticated"),
-        AuthState::Failed => ("see detail", "see detail"),
-    }
-}
-
 fn tooltip(status: Option<&AuthStatus>) -> String {
     match status {
         None => "usg-TEAP: no status yet".to_string(),
         Some(s) => format!(
             "usg-TEAP — {} ({})",
             s.state.label(),
-            identity_label(s.identity)
+            crate::text::identity_label(s.identity)
         ),
     }
 }
@@ -158,20 +153,13 @@ fn menu_lines(status: Option<&AuthStatus>) -> Vec<String> {
     let Some(s) = status else {
         return vec!["No authentication status yet".to_string()];
     };
-    let (outer, inner) = outer_inner(s.state);
-    let dash = |v: &str| {
-        if v.is_empty() {
-            "—".to_string()
-        } else {
-            v.to_string()
-        }
-    };
+    let (outer, inner) = crate::text::outer_inner(s.state);
     let mut lines = vec![
-        format!("Session: {}", identity_label(s.identity)),
+        format!("Session: {}", crate::text::identity_label(s.identity)),
         format!("Outer (TEAP tunnel): {outer}"),
         format!("Inner (EAP-TLS): {inner}"),
-        format!("Certificate: {}", dash(&s.cert_subject)),
-        format!("Server: {}", dash(&s.server_name)),
+        format!("Certificate: {}", crate::text::dash(&s.cert_subject)),
+        format!("Server: {}", crate::text::dash(&s.server_name)),
     ];
     if !s.detail.is_empty() {
         lines.push(format!("Detail: {}", s.detail));
@@ -196,6 +184,7 @@ fn show_menu(hwnd: HWND) {
             let _ = AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, PCWSTR(text.as_ptr()));
         }
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
+        let _ = AppendMenuW(menu, MF_STRING, ID_STATUS, w!("Status window…"));
         let _ = AppendMenuW(menu, MF_STRING, ID_EXIT, w!("Exit"));
 
         let mut pt = POINT::default();
@@ -220,21 +209,45 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
     match msg {
         WM_TRAY => {
             let event = (lparam.0 as u32) & 0xFFFF;
-            if event == WM_LBUTTONUP || event == WM_RBUTTONUP {
-                show_menu(hwnd);
+            match event {
+                // Left-click: pop the status toast with the current state.
+                WM_LBUTTONUP => {
+                    let state = read_status().map_or(AuthState::Idle, |s| s.state);
+                    crate::toast::notify(state);
+                }
+                // Right-click: the text status menu.
+                WM_RBUTTONUP => show_menu(hwnd),
+                _ => {}
             }
             LRESULT(0)
         }
         WM_TIMER => {
+            let status = read_status();
             let mut nid = base_nid(hwnd);
-            refresh(&mut nid);
+            refresh(&mut nid, status.as_ref());
             let _ = Shell_NotifyIconW(NIM_MODIFY, &nid);
+            // Pop a toast only on a genuine change to a present state (don't let a
+            // transient missing-file read overwrite the last state and re-fire).
+            let cur = status.as_ref().map(|s| s.state);
+            LAST_STATE.with(|l| {
+                let mut last = l.borrow_mut();
+                if cur.is_some() && cur != *last {
+                    if let Some(state) = cur {
+                        crate::toast::notify(state);
+                    }
+                    *last = cur;
+                }
+            });
             LRESULT(0)
         }
         WM_COMMAND => {
-            if (wparam.0 & 0xFFFF) == ID_EXIT {
-                let _ = Shell_NotifyIconW(NIM_DELETE, &base_nid(hwnd));
-                let _ = DestroyWindow(hwnd);
+            match wparam.0 & 0xFFFF {
+                ID_STATUS => crate::window::open(),
+                ID_EXIT => {
+                    let _ = Shell_NotifyIconW(NIM_DELETE, &base_nid(hwnd));
+                    let _ = DestroyWindow(hwnd);
+                }
+                _ => {}
             }
             LRESULT(0)
         }
