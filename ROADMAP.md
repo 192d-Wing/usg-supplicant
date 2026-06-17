@@ -66,6 +66,19 @@ EAPHost docs) established this is a **harness limitation, not a method defect**:
   caching), `EapHostPeerGetIdentity` (tunnel→inner API, `E_INVALIDARG`), skipping
   the Identity round, and `EAP_FLAG_MACHINE_AUTH`.
 
+**Live attempt (2026-06-17).** Ran the full host-side flow on a Windows 11 host:
+`dot3svc` started, method registered, profile installed on the wired NIC, link
+reconnected. `dot3svc` loaded our config and **emitted EAPOL on link-up**, but every
+NIC reported `0x70003` *"the network does not support authentication"* with
+`EapHost/Operational` empty — because the available switch **does not support
+802.1X** (no authenticator on the wire, so no EAP-Request/Identity). This validates
+the supplicant side end-to-end *up to the wire*; the block is purely the missing
+authenticator. It also surfaced and fixed a real bug: `lan_profile_xml` emitted
+`<authMode>`, which `netsh lan add profile` rejects as *"corrupted"* — removing it
+(default `machineOrUser`; the machine/user choice is driven by the embedded blob) is
+what let the profile install. The existing RADIUS (`radius.oopl.dev.mil`) + USG Dev
+CA PKI are ready, so `hostapd` (`driver=wired`) is the only missing piece.
+
 **What's needed (lab infrastructure, not in this repo).** An 802.1X authenticator
 that relays EAPOL to a RADIUS server speaking the `usg-TEAP/1.3` server contract —
 e.g. `hostapd` (`driver=wired`) or a managed switch in front of `usg-radius`. Run
