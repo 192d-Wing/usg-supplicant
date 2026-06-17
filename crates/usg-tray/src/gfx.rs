@@ -263,6 +263,21 @@ unsafe fn fill_circle(g: *mut GpGraphics, argb: u32, x: i32, y: i32, d: i32) {
     }
 }
 
+unsafe fn spinner(g: *mut GpGraphics, frame: u32, x: i32, y: i32, d: i32) {
+    // Faint full track, then a bright rotating 90° arc (Unit(2) = pixels).
+    let mut track = std::ptr::null_mut();
+    if GdipCreatePen1(0x3FFF_FFFF, 4.0, Unit(2), &mut track).0 == 0 {
+        let _ = GdipDrawArcI(g, track, x, y, d, d, 0.0, 360.0);
+        let _ = GdipDeletePen(track);
+    }
+    let start = (frame.wrapping_mul(20) % 360) as f32;
+    let mut arc = std::ptr::null_mut();
+    if GdipCreatePen1(0xFF42_A5F5, 4.0, Unit(2), &mut arc).0 == 0 {
+        let _ = GdipDrawArcI(g, arc, x, y, d, d, start, 90.0);
+        let _ = GdipDeletePen(arc);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -281,20 +296,5 @@ mod tests {
         }
         shutdown();
         assert!(built, "GdipCreateHICONFromBitmap returned a null HICON");
-    }
-}
-
-unsafe fn spinner(g: *mut GpGraphics, frame: u32, x: i32, y: i32, d: i32) {
-    // Faint full track, then a bright rotating 90° arc (Unit(2) = pixels).
-    let mut track = std::ptr::null_mut();
-    if GdipCreatePen1(0x3FFF_FFFF, 4.0, Unit(2), &mut track).0 == 0 {
-        let _ = GdipDrawArcI(g, track, x, y, d, d, 0.0, 360.0);
-        let _ = GdipDeletePen(track);
-    }
-    let start = (frame.wrapping_mul(20) % 360) as f32;
-    let mut arc = std::ptr::null_mut();
-    if GdipCreatePen1(0xFF42_A5F5, 4.0, Unit(2), &mut arc).0 == 0 {
-        let _ = GdipDrawArcI(g, arc, x, y, d, d, start, 90.0);
-        let _ = GdipDeletePen(arc);
     }
 }
