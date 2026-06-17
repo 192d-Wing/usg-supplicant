@@ -34,17 +34,16 @@ pub fn eap_host_config_xml(connection_blob: &[u8]) -> String {
     )
 }
 
-/// A `dot3svc` wired **LAN profile** that enables 802.1X with machine
-/// authentication and our EAP method, embedding [`eap_host_config_xml`]. Install
-/// with `netsh lan add profile filename=<this> interface=<adapter>`.
+/// A `dot3svc` wired **LAN profile** that enables 802.1X with our EAP method,
+/// embedding [`eap_host_config_xml`]. Install with
+/// `netsh lan add profile filename=<this> interface=<adapter>`.
 ///
-/// The structure mirrors Microsoft's canonical wired machine-certificate sample
-/// (the `<security>` child order, `authMode` before `<EAPConfig>`, the `http://`
-/// namespaces). The embedded `EapHostConfig` half is validated live against
-/// `EapHostPeerConfigXml2Blob`; the surrounding `LANProfile`/`OneX` wrapper is
-/// pending live `netsh lan add profile` validation (`WINDOWS_DEV.md` §4.6). Only a
-/// machine-auth profile is emitted (the boot path); a user-auth variant would set
-/// `authMode` to `user`/`machineOrUser`.
+/// No `<authMode>` element is emitted: `netsh lan add profile` rejects the profile
+/// as "corrupted" when `authMode` is present (verified live on Windows 11 against the
+/// wired `OneX` schema, in either position relative to `<EAPConfig>`). Omitting it
+/// uses the default (`machineOrUser`). Machine-vs-user is anyway driven by the
+/// embedded `SessionConfigBlob`'s identity flag — our method reads that to pick
+/// `Local Machine\My` vs `Current User\My`, independent of the `OneX` `authMode`.
 #[must_use]
 pub fn lan_profile_xml(connection_blob: &[u8]) -> String {
     format!(
@@ -55,7 +54,6 @@ pub fn lan_profile_xml(connection_blob: &[u8]) -> String {
                <OneXEnforced>false</OneXEnforced>\
                <OneXEnabled>true</OneXEnabled>\
                <OneX xmlns=\"http://www.microsoft.com/networking/OneX/v1\">\
-                 <authMode>machine</authMode>\
                  <EAPConfig>{}</EAPConfig>\
                </OneX>\
              </security>\
@@ -82,13 +80,15 @@ mod tests {
     }
 
     #[test]
-    fn lan_profile_enables_onex_machine_auth_and_wraps_the_eap_config() {
+    fn lan_profile_enables_onex_and_wraps_the_eap_config() {
         let xml = lan_profile_xml(BLOB);
         assert!(xml.starts_with("<?xml version=\"1.0\"?>"));
         assert!(xml.contains("<LANProfile"));
         assert!(xml.contains("<OneXEnabled>true</OneXEnabled>"));
-        assert!(xml.contains("<authMode>machine</authMode>"));
-        // The EAPConfig contains the full EapHostConfig naming our method.
+        // No <authMode>: netsh rejects the profile as "corrupted" when it's present.
+        assert!(!xml.contains("authMode"));
+        // OneX wraps EAPConfig directly; EAPConfig holds the EapHostConfig for us.
+        assert!(xml.contains("<OneX"));
         assert!(xml.contains("<EAPConfig><EapHostConfig"));
         assert!(xml.contains("abcd0100"));
     }
