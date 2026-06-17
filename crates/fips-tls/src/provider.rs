@@ -20,25 +20,12 @@ use crate::error::FipsTlsError;
 /// crate-local [`FipsTlsError`] so callers keep a single error type. This checks
 /// the **library** crypto module only. The **OS** FIPS policy (Windows
 /// `FipsAlgorithmPolicy`), which governs the CNG/smartcard signing half of the
-/// FIPS boundary, is a separate gate — see [`assert_os_fips_mode`].
+/// FIPS boundary, is a separate, live gate implemented where the platform registry
+/// dependency lives — `eaphost::os_fips::assert_fips_policy` (asserted at
+/// `EapPeerInitialize` and per `BeginSession`).
 ///
 /// # Errors
 /// [`FipsTlsError::NotFips`] when the provider is not FIPS-validated.
 pub fn assert_fips(provider: &CryptoProvider) -> Result<(), FipsTlsError> {
     usg_fips_tls::provider::assert_fips(provider).map_err(Into::into)
-}
-
-/// Fail-closed gate for the host OS FIPS policy (DESIGN.md §3).
-///
-/// TODO(windows-fips-policy, milestone 6 / eaphost): read
-/// `HKLM\System\CurrentControlSet\Control\Lsa\FipsAlgorithmPolicy\Enabled` and
-/// return [`FipsTlsError::NotFips`] unless it is `1`. Implemented with the
-/// Windows `EAPHost` integration, where the platform registry dependency lives.
-/// Until then this is intentionally a no-op so non-Windows dev builds run; it
-/// MUST be wired before production use so CNG/smartcard signing is gated too.
-///
-/// # Errors
-/// Currently never; see the TODO above.
-pub fn assert_os_fips_mode() -> Result<(), FipsTlsError> {
-    Ok(())
 }

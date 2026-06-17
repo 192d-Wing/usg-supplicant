@@ -99,8 +99,10 @@ jobs:
         if: runner.os == 'Windows'
         uses: ilammy/setup-nasm@v1
 
+      # Build the shipped artifact (eaphost.dll) with the validated module, not just
+      # the fips-tls leaf — `eaphost/fips` enables `fips-tls/fips` for the whole tree.
       - name: Build (fips)
-        run: cargo build -p fips-tls --features fips
+        run: cargo build -p eaphost --features fips
 
       - name: Test (fips)
-        run: cargo test -p fips-tls --features fips
+        run: cargo test -p eaphost -p fips-tls --features fips
