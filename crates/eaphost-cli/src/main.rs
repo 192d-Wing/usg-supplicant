@@ -29,7 +29,7 @@ CONFIG OPTIONS (emit-config / emit-profile / install-profile):
     --cert-subject <substr>  Client-cert subject substring to select (required)
     --machine                Machine session (default)
     --user                   User session
-    --mat-vendor-id <hex>    MAT Vendor SMI PEN, hex (default 9999)
+    --mat-vendor-id <hex>    MAT Vendor SMI PEN, hex digits, 0x optional (default 9999 = 0x9999)
     --max-fragment <n>       Max TLS fragment per TEAP message (default 1400)
     --root <file.der>        Server trust-anchor DER, repeatable
     --out <file>             Write XML here instead of stdout (emit-* only)
@@ -67,21 +67,26 @@ fn run(args: &[String]) -> Result<(), String> {
     }
 }
 
-/// First value following `--name`, if present.
+/// First value following `--name`, if present. A following token that is itself a
+/// `--flag` is treated as a missing value (so `--server-name --cert-subject x`
+/// reports a missing `--server-name` value rather than silently using
+/// `--cert-subject` as the name).
 fn flag<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
     args.iter()
         .position(|a| a == name)
         .and_then(|i| args.get(i + 1))
         .map(String::as_str)
+        .filter(|v| !v.starts_with("--"))
 }
 
-/// All values following each occurrence of `--name` (repeatable flag).
+/// All values following each occurrence of `--name` (repeatable flag); a
+/// `--flag`-looking value is skipped (missing value).
 fn repeated<'a>(args: &'a [String], name: &str) -> Vec<&'a str> {
     let mut out = Vec::new();
     let mut i = 0;
     while i < args.len() {
         if args[i] == name {
-            if let Some(v) = args.get(i + 1) {
+            if let Some(v) = args.get(i + 1).filter(|v| !v.starts_with("--")) {
                 out.push(v.as_str());
             }
             i += 2;
@@ -101,18 +106,28 @@ fn required<'a>(args: &'a [String], name: &str) -> Result<&'a str, String> {
 }
 
 fn build_blob(args: &[String]) -> Result<SessionConfigBlob, String> {
+    // Validate required flags first — before optional parsing or reading --root
+    // files — so a missing flag is the reported error, not a downstream I/O failure.
+    let server_name = required(args, "--server-name")?.to_string();
+    let selector_subject = required(args, "--cert-subject")?.to_string();
     if present(args, "--machine") && present(args, "--user") {
         return Err("--machine and --user are mutually exclusive".to_string());
     }
     let mat_vendor_id = match flag(args, "--mat-vendor-id") {
-        Some(s) => u32::from_str_radix(s.trim_start_matches("0x"), 16)
-            .map_err(|_| format!("invalid --mat-vendor-id '{s}' (expected hex)"))?,
+        Some(s) => {
+            let hex = s
+                .strip_prefix("0x")
+                .or_else(|| s.strip_prefix("0X"))
+                .unwrap_or(s);
+            u32::from_str_radix(hex, 16)
+                .map_err(|_| format!("invalid --mat-vendor-id '{s}' (expected hex digits)"))?
+        }
         None => 0x9999,
     };
     let max_fragment = match flag(args, "--max-fragment") {
         Some(s) => s
             .parse::<u32>()
-            .map_err(|_| format!("invalid --max-fragment '{s}'"))?,
+            .map_err(|_| format!("invalid --max-fragment '{s}' (expected a decimal integer)"))?,
         None => 1400,
     };
     let mut roots = Vec::new();
@@ -121,10 +136,10 @@ fn build_blob(args: &[String]) -> Result<SessionConfigBlob, String> {
     }
     Ok(SessionConfigBlob {
         machine: !present(args, "--user"),
-        server_name: required(args, "--server-name")?.to_string(),
+        server_name,
         mat_vendor_id,
         max_fragment,
-        selector_subject: required(args, "--cert-subject")?.to_string(),
+        selector_subject,
         roots,
         // Provisioning carries no stored MAT; the user-session MAT is runtime state.
         mat: None,
@@ -144,8 +159,14 @@ fn write_out(args: &[String], xml: &str) -> Result<(), String> {
 #[cfg(windows)]
 fn register_cmd(args: &[String]) -> Result<(), String> {
     let dll = required(args, "--dll")?;
-    eaphost::register::register(dll).map_err(|e| format!("register: {e}"))?;
-    eprintln!("registered the usg-TEAP method (PeerDllPath = {dll})");
+    // EAPHost runs as a service from its own working directory, so PeerDllPath must
+    // be absolute — resolve a relative --dll against the current directory.
+    let dll_abs = std::path::absolute(dll).map_err(|e| format!("resolve --dll {dll}: {e}"))?;
+    let dll_str = dll_abs
+        .to_str()
+        .ok_or_else(|| format!("--dll path is not valid Unicode: {}", dll_abs.display()))?;
+    eaphost::register::register(dll_str).map_err(|e| format!("register: {e}"))?;
+    eprintln!("registered the usg-TEAP method (PeerDllPath = {dll_str})");
     Ok(())
 }
 
@@ -160,7 +181,8 @@ fn unregister_cmd() -> Result<(), String> {
 fn install_profile_cmd(args: &[String]) -> Result<(), String> {
     let interface = required(args, "--interface")?;
     let xml = lan_profile_xml(&build_blob(args)?.to_bytes());
-    let path = std::env::temp_dir().join("usg-teap-lanprofile.xml");
+    // Per-process temp file so concurrent runs don't clobber each other.
+    let path = std::env::temp_dir().join(format!("usg-teap-lanprofile-{}.xml", std::process::id()));
     std::fs::write(&path, xml).map_err(|e| format!("write profile: {e}"))?;
     let status = std::process::Command::new("netsh")
         .args([
@@ -179,10 +201,8 @@ fn install_profile_cmd(args: &[String]) -> Result<(), String> {
             path.display()
         ));
     }
-    eprintln!(
-        "installed the LAN profile on '{interface}' (from {})",
-        path.display()
-    );
+    let _ = std::fs::remove_file(&path);
+    eprintln!("installed the LAN profile on '{interface}' (from a temp file)");
     Ok(())
 }
 
