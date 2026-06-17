@@ -105,4 +105,4 @@ jobs:
         run: cargo build -p eaphost --features fips
 
       - name: Test (fips)
-        run: cargo test -p fips-tls --features fips
+        run: cargo test -p eaphost -p fips-tls --features fips
