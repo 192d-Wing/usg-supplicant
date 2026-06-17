@@ -325,8 +325,19 @@ pub unsafe extern "system" fn EapPeerConfigXml2Blob(
     let Some(doc) = (unsafe { IXMLDOMDocument2::from_raw_borrowed(&p_config_doc) }) else {
         return E_FAIL;
     };
-    // SAFETY: borrowed COM call; `text()` returns the document's text content.
-    let Ok(text) = (unsafe { doc.text() }) else {
+    // Read our element's text. Prefer selecting `<UsgTeapConfigBlob>` by name so a
+    // document that wraps our element in EAPHost's connection-data structure
+    // (siblings, indentation) doesn't contaminate the hex; fall back to the whole
+    // document's text content for the bare, self-emitted form.
+    let query = BSTR::from(format!("//{}", crate::config_xml::BLOB_ELEMENT));
+    // SAFETY: borrowed COM calls. A no-match `selectSingleNode` yields a null node
+    // (guarded here), so we read `text()` from our element or, failing that, the
+    // document.
+    let text_result = match unsafe { doc.selectSingleNode(&query) } {
+        Ok(node) if !node.as_raw().is_null() => unsafe { node.text() },
+        _ => unsafe { doc.text() },
+    };
+    let Ok(text) = text_result else {
         return E_FAIL;
     };
     let Some(blob) = crate::config_xml::xml_text_to_blob(&text.to_string()) else {

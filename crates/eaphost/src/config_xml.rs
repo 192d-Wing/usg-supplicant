@@ -26,8 +26,8 @@ fn to_hex(bytes: &[u8]) -> String {
     s
 }
 
-/// Decode hex (either case) to bytes. Returns `None` on odd length or a non-hex
-/// character.
+/// Decode hex (either case) to bytes. Returns `None` on odd length or any
+/// non-hex character.
 fn from_hex(s: &str) -> Option<Vec<u8>> {
     let s = s.trim();
     if s.len() & 1 == 1 {
@@ -35,6 +35,11 @@ fn from_hex(s: &str) -> Option<Vec<u8>> {
     }
     let mut out = Vec::with_capacity(s.len() / 2);
     for pair in s.as_bytes().chunks_exact(2) {
+        // Reject anything `from_str_radix` would otherwise accept but isn't a hex
+        // digit (a leading `+`/`-`, whitespace), so malformed text fails closed.
+        if !pair.iter().all(u8::is_ascii_hexdigit) {
+            return None;
+        }
         let text = core::str::from_utf8(pair).ok()?;
         out.push(u8::from_str_radix(text, 16).ok()?);
     }
@@ -49,12 +54,14 @@ pub fn blob_to_xml(blob: &[u8]) -> String {
     format!("<{BLOB_ELEMENT}>{}</{BLOB_ELEMENT}>", to_hex(blob))
 }
 
-/// Recover the connection blob from the document's text content (the concatenated
-/// text of the XML tree — i.e. the hex string). Returns `None` if the text is not
-/// valid hex.
+/// Recover the connection blob from the `<UsgTeapConfigBlob>` element's text (the
+/// hex string). Returns `None` if the text is not valid hex, or if it decodes to
+/// an empty blob — an empty connection blob is never a valid `SessionConfigBlob`,
+/// so we fail closed rather than report a meaningless zero-length config.
 #[must_use]
 pub fn xml_text_to_blob(doc_text: &str) -> Option<Vec<u8>> {
-    from_hex(doc_text)
+    let blob = from_hex(doc_text)?;
+    if blob.is_empty() { None } else { Some(blob) }
 }
 
 #[cfg(test)]
@@ -103,5 +110,18 @@ mod tests {
         assert_eq!(from_hex("abc"), None); // odd length
         assert_eq!(from_hex("zz"), None); // non-hex
         assert_eq!(from_hex("0g"), None);
+        // `from_str_radix` would accept these signs/space, but they aren't hex.
+        assert_eq!(from_hex("+a"), None);
+        assert_eq!(from_hex("-1"), None);
+        assert_eq!(from_hex("a b c d"), None);
+    }
+
+    #[test]
+    fn xml_text_to_blob_rejects_empty_config() {
+        // An empty / whitespace-only document is not a valid connection blob.
+        assert_eq!(xml_text_to_blob(""), None);
+        assert_eq!(xml_text_to_blob("   \n"), None);
+        // ...but `from_hex` itself still treats empty input as an empty decode.
+        assert_eq!(from_hex(""), Some(vec![]));
     }
 }

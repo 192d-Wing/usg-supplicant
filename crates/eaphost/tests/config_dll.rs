@@ -4,7 +4,8 @@
 //! Unlike the `real_eaphost` tests this needs only COM + in-box MSXML (no
 //! elevation, FIPS, or `EAPHost` service), so it runs as a normal test on the
 //! Windows CI runner and validates the COM glue end to end: our connection blob
-//! becomes an `IXMLDOMDocument2` and parses back byte-for-byte.
+//! becomes an `IXMLDOMDocument2` and parses back byte-for-byte, including when our
+//! element is wrapped in a larger document.
 #![cfg(windows)]
 #![allow(
     clippy::unwrap_used,
@@ -17,11 +18,15 @@ use core::ffi::c_void;
 
 use eaphost::config::SessionConfigBlob;
 use eaphost::peer::{EapPeerConfigBlob2Xml, EapPeerConfigXml2Blob, EapPeerFreeMemory};
+use windows::Win32::Data::Xml::MsXml::{DOMDocument60, IXMLDOMDocument2};
 use windows::Win32::Security::ExtensibleAuthenticationProtocol::{
     EAP_ERROR, EAP_METHOD_TYPE, EAP_TYPE,
 };
-use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize};
-use windows::core::Interface;
+use windows::Win32::System::Com::{
+    CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
+    CoUninitialize,
+};
+use windows::core::{BSTR, Interface};
 
 fn method_type() -> EAP_METHOD_TYPE {
     EAP_METHOD_TYPE {
@@ -48,14 +53,60 @@ fn sample_blob() -> Vec<u8> {
     .to_bytes()
 }
 
+fn hex(bytes: &[u8]) -> String {
+    use core::fmt::Write as _;
+    let mut s = String::new();
+    for b in bytes {
+        let _ = write!(s, "{b:02x}");
+    }
+    s
+}
+
+/// Call `EapPeerConfigXml2Blob` on a borrowed document and return the recovered
+/// blob. Frees the returned buffer; does not release `doc`.
+///
+/// # Safety
+/// `doc` must be a live `IXMLDOMDocument2` raw pointer.
+unsafe fn xml2blob(doc: *mut c_void) -> Vec<u8> {
+    let mut out: *mut u8 = core::ptr::null_mut();
+    let mut out_len = 0u32;
+    let mut err: *mut EAP_ERROR = core::ptr::null_mut();
+    let rc = unsafe {
+        EapPeerConfigXml2Blob(
+            0,
+            method_type(),
+            doc,
+            &raw mut out,
+            &raw mut out_len,
+            &raw mut err,
+        )
+    };
+    assert_eq!(rc, 0, "EapPeerConfigXml2Blob");
+    assert!(!out.is_null(), "Xml2Blob produced a buffer");
+    let recovered = unsafe { core::slice::from_raw_parts(out, out_len as usize) }.to_vec();
+    unsafe { EapPeerFreeMemory(out.cast()) };
+    recovered
+}
+
+/// Build an `IXMLDOMDocument2` from an XML string, returning its raw pointer (the
+/// caller releases it).
+///
+/// # Safety
+/// COM must be initialized on this thread.
+unsafe fn doc_from_xml(xml: &str) -> *mut c_void {
+    let doc: IXMLDOMDocument2 =
+        unsafe { CoCreateInstance(&DOMDocument60, None, CLSCTX_INPROC_SERVER) }.unwrap();
+    assert!(
+        unsafe { doc.loadXML(&BSTR::from(xml)) }.unwrap().as_bool(),
+        "loadXML"
+    );
+    doc.into_raw()
+}
+
 #[test]
 fn config_blob_round_trips_through_msxml() {
-    // SAFETY: COM init/teardown bracket the FFI round-trip; the FFI exports build
-    // (Blob2Xml) and consume (Xml2Blob) a real MSXML document.
-    unsafe {
-        // S_FALSE (already initialized on this thread) is fine.
-        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
-    }
+    // SAFETY: COM init; only balance with CoUninitialize when it succeeded.
+    let co_init = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
     let blob = sample_blob();
 
     let recovered = unsafe {
@@ -72,23 +123,9 @@ fn config_blob_round_trips_through_msxml() {
         assert_eq!(rc, 0, "EapPeerConfigBlob2Xml");
         assert!(!doc.is_null(), "Blob2Xml produced a document");
 
-        let mut out: *mut u8 = core::ptr::null_mut();
-        let mut out_len = 0u32;
-        let rc = EapPeerConfigXml2Blob(
-            0,
-            method_type(),
-            doc,
-            &raw mut out,
-            &raw mut out_len,
-            &raw mut err,
-        );
-        assert_eq!(rc, 0, "EapPeerConfigXml2Blob");
-        assert!(!out.is_null(), "Xml2Blob produced a buffer");
-        let recovered = core::slice::from_raw_parts(out, out_len as usize).to_vec();
-
-        EapPeerFreeMemory(out.cast());
+        let recovered = xml2blob(doc);
         // Release the COM document we took ownership of from Blob2Xml.
-        drop(windows::Win32::Data::Xml::MsXml::IXMLDOMDocument2::from_raw(doc));
+        drop(IXMLDOMDocument2::from_raw(doc));
         recovered
     };
 
@@ -100,6 +137,39 @@ fn config_blob_round_trips_through_msxml() {
     assert_eq!(parsed.server_name, "teap.test.local");
     assert_eq!(parsed.mat.as_deref(), Some(&[0xde, 0xad, 0xbe, 0xef][..]));
 
-    // SAFETY: balance the CoInitializeEx above.
-    unsafe { CoUninitialize() };
+    if co_init.is_ok() {
+        // SAFETY: balances the successful CoInitializeEx above.
+        unsafe { CoUninitialize() };
+    }
+}
+
+#[test]
+fn config_xml2blob_reads_element_wrapped_in_a_larger_document() {
+    // SAFETY: COM init; only balance with CoUninitialize when it succeeded.
+    let co_init = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
+    let blob = sample_blob();
+
+    // Our element wrapped with a sibling (whose text would corrupt a whole-document
+    // read) and indentation, as EAPHost may present it from a connection profile.
+    let wrapped = format!(
+        "<EapHostConfig>\n  <Other>ffffffff</Other>\n  <UsgTeapConfigBlob>{}</UsgTeapConfigBlob>\n</EapHostConfig>",
+        hex(&blob)
+    );
+
+    let recovered = unsafe {
+        let doc = doc_from_xml(&wrapped);
+        let recovered = xml2blob(doc);
+        drop(IXMLDOMDocument2::from_raw(doc));
+        recovered
+    };
+
+    assert_eq!(
+        recovered, blob,
+        "named-node selection recovers the blob despite wrapping/siblings/whitespace"
+    );
+
+    if co_init.is_ok() {
+        // SAFETY: balances the successful CoInitializeEx above.
+        unsafe { CoUninitialize() };
+    }
 }
