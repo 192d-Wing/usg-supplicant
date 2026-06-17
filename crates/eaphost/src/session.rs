@@ -43,11 +43,20 @@ pub trait TeapStep {
     /// Propagates the driver's [`DriverError`]; [`PeerSession`] treats any error
     /// as a fail-closed authentication failure.
     fn step(&mut self, eap_request: &[u8]) -> Result<DriverStep, DriverError>;
+
+    /// Whether the outer TEAP tunnel (server-authenticated TLS 1.3) is established
+    /// — i.e. the exchange has moved on to the inner EAP-TLS. Drives the status
+    /// tray's outer-vs-inner display.
+    fn tunnel_established(&self) -> bool;
 }
 
 impl TeapStep for supplicant::driver::TeapDriver {
     fn step(&mut self, eap_request: &[u8]) -> Result<DriverStep, DriverError> {
         supplicant::driver::TeapDriver::step(self, eap_request)
+    }
+
+    fn tunnel_established(&self) -> bool {
+        supplicant::driver::TeapDriver::is_established(self)
     }
 }
 
@@ -130,6 +139,13 @@ impl<D: TeapStep> PeerSession<D> {
     #[must_use]
     pub fn kind(&self) -> SessionKind {
         self.kind
+    }
+
+    /// Whether the outer TEAP tunnel is established (the inner EAP-TLS runs after
+    /// this). Used to publish outer-vs-inner status to the tray.
+    #[must_use]
+    pub fn tunnel_established(&self) -> bool {
+        self.driver.tunnel_established()
     }
 
     /// Process one inbound EAP request (`EapPeerProcessRequestPacket`).

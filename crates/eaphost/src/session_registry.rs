@@ -94,6 +94,12 @@ impl<D: TeapStep> SessionRegistry<D> {
         self.with(|i| i.sessions.get(&handle).and_then(|s| s.result().cloned()))
     }
 
+    /// Whether the outer TEAP tunnel is established for `handle` (for the status
+    /// tray). `None` if the handle is unknown.
+    pub fn tunnel_established(&self, handle: SessionHandle) -> Option<bool> {
+        self.with(|i| i.sessions.get(&handle).map(PeerSession::tunnel_established))
+    }
+
     /// End and drop the session for `handle`. Returns whether it existed.
     pub fn end(&self, handle: SessionHandle) -> bool {
         self.with(|i| i.sessions.remove(&handle).is_some())

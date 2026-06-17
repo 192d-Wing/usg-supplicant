@@ -21,6 +21,9 @@ impl TeapStep for FakeDriver {
             .pop_front()
             .unwrap_or(Err(DriverError::Protocol("fake exhausted")))
     }
+    fn tunnel_established(&self) -> bool {
+        false
+    }
 }
 
 fn session(steps: Vec<Result<DriverStep, DriverError>>) -> PeerSession<FakeDriver> {

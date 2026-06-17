@@ -278,6 +278,7 @@ dependencies = [
  "supplicant",
  "teap",
  "teap-test-harness",
+ "usg-status",
  "windows",
  "zeroize",
 ]
@@ -841,6 +842,18 @@ dependencies = [
 [[package]]
 name = "usg-kat"
 version = "0.1.0"
+
+[[package]]
+name = "usg-status"
+version = "0.1.0"
+
+[[package]]
+name = "usg-tray"
+version = "0.1.0"
+dependencies = [
+ "usg-status",
+ "windows",
+]
 
 [[package]]
 name = "version_check"
