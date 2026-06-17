@@ -66,6 +66,11 @@ const NOT_SUPPORTED: u32 = ERROR_NOT_SUPPORTED.0;
 /// Generic failure for a routine that cannot complete (fail closed).
 const E_FAIL: u32 = 0x8000_4005; // E_FAIL-ish; EAPHost only needs nonzero.
 
+/// Smallest valid EAP packet: the 4-byte header (code, id, 16-bit length).
+const EAP_HEADER_LEN: u32 = 4;
+/// Largest valid EAP packet: the 16-bit Length field's maximum (RFC 3748).
+const MAX_EAP_PACKET: u32 = u16::MAX as u32;
+
 /// The EAP-Response/Identity we present in the outer exchange. TEAP protects the
 /// real identity (the inner EAP-TLS client certificate) inside the TLS tunnel, so
 /// the cleartext outer identity is deliberately anonymous.
@@ -576,6 +581,14 @@ extern "system" fn EapPeerProcessRequestPacket(
 ) -> u32 {
     unsafe { clear_error(pp_eap_error) };
     if p_receive_packet.is_null() || p_eap_output.is_null() {
+        return E_FAIL;
+    }
+    // Bound the host-declared length before slicing (status assessment M3): an EAP
+    // packet is at least a 4-byte header and at most its 16-bit Length field allows
+    // (RFC 3748), so anything outside [4, 65535] is malformed — reject it rather than
+    // form an out-of-bounds slice from a non-conformant length. `decode` re-checks
+    // the exact length; this just caps the raw span.
+    if !(EAP_HEADER_LEN..=MAX_EAP_PACKET).contains(&cb_receive_packet) {
         return E_FAIL;
     }
     // The EapPacket is the raw EAP packet (header + data); cbReceivePacket is its

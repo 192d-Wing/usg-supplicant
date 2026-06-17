@@ -12,6 +12,14 @@ description = "Windows EAPHost integration for the TEAP supplicant: OS FIPS-poli
 [lib]
 crate-type = ["lib", "cdylib"]
 
+[features]
+# Route the entire crypto chain through the FIPS 140-3 validated AWS-LC module.
+# Release builds REQUIRE it (fips-tls has a compile_error! that fails a non-test
+# release build without `fips`), and `eaphost.dll` is the artifact that ships — so a
+# FIPS build targets *this* crate (enabling `fips-tls/fips` for the whole tree).
+default = []
+fips = ["fips-tls/fips"]
+
 [dependencies]
 # Platform-independent TEAP orchestration the peer-method shim drives.
 supplicant = { path = "../supplicant" }
