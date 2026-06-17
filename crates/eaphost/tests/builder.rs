@@ -57,7 +57,8 @@ fn build_user_driver_from_real_store() {
         mat_to_present: None,
         max_fragment: 1024,
     };
-    let mut driver = build_driver(cfg, RootCertStore::empty(), &selector).unwrap();
+    let (mut driver, thumbprint) = build_driver(cfg, RootCertStore::empty(), &selector).unwrap();
+    assert_eq!(thumbprint.len(), 64, "SHA-256 thumbprint is 64 hex chars");
     match driver.step(&teap_start()).unwrap() {
         DriverStep::Respond(resp) => assert!(!resp.is_empty(), "ClientHello response"),
         DriverStep::Finished { outcome, .. } => {

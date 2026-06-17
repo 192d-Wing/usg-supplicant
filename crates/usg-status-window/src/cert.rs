@@ -13,56 +13,93 @@ use std::path::Path;
 
 use usg_status::Identity;
 use windows::Win32::Security::Cryptography::{
-    CERT_FIND_SUBJECT_STR, CERT_OPEN_STORE_FLAGS, CERT_QUERY_ENCODING_TYPE,
-    CERT_STORE_PROV_SYSTEM_W, CERT_STORE_READONLY_FLAG, CERT_SYSTEM_STORE_CURRENT_USER,
-    CERT_SYSTEM_STORE_LOCAL_MACHINE, CertCloseStore, CertFindCertificateInStore,
-    CertFreeCertificateContext, CertOpenStore, PKCS_7_ASN_ENCODING, X509_ASN_ENCODING,
+    CERT_CONTEXT, CERT_FIND_ANY, CERT_FIND_SUBJECT_STR, CERT_OPEN_STORE_FLAGS,
+    CERT_QUERY_ENCODING_TYPE, CERT_SHA256_HASH_PROP_ID, CERT_STORE_PROV_SYSTEM_W,
+    CERT_STORE_READONLY_FLAG, CERT_SYSTEM_STORE_CURRENT_USER, CERT_SYSTEM_STORE_LOCAL_MACHINE,
+    CertCloseStore, CertFindCertificateInStore, CertFreeCertificateContext,
+    CertGetCertificateContextProperty, CertOpenStore, HCERTSTORE, PKCS_7_ASN_ENCODING,
+    X509_ASN_ENCODING,
 };
 use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 use windows::core::{PCWSTR, w};
 
-/// Open the certificate (matched by subject CN) in the Windows viewer, or fall back
-/// to the certificate manager for the session's store.
-pub fn view(identity: Identity, subject: &str) {
-    if try_view_exact(identity, subject).is_none() {
-        open_cert_manager(identity);
+/// Open the in-use certificate in the Windows viewer. Prefer the exact cert by its
+/// SHA-256 thumbprint; fall back to a subject-CN match, then to the certificate
+/// manager for the session's store.
+pub fn view(identity: Identity, subject: &str, thumbprint: &str) {
+    if try_view_by_thumbprint(identity, thumbprint).is_some() {
+        return;
     }
+    if try_view_by_subject(identity, subject).is_some() {
+        return;
+    }
+    open_cert_manager(identity);
 }
 
-/// Locate the cert by subject CN, export its DER, and shell-open it. `None` if the
-/// store can't be opened or no cert matches.
-///
-/// Limitation: this matches the first cert whose subject contains the CN, without the
-/// client-auth-EKU filter the supplicant applies when *selecting* the cert. If a store
-/// holds several certs sharing that CN (e.g. a renewed pair), the viewer may show a
-/// different one than was used to authenticate. A future change can publish the cert
-/// thumbprint in the status to find it exactly.
-fn try_view_exact(identity: Identity, subject: &str) -> Option<()> {
-    let cn = common_name(subject);
-    if cn.is_empty() {
-        return None;
-    }
-    let cn_wide = wide(&cn);
+/// Open the read-only `…\My` system store for the session identity.
+fn open_store(identity: Identity) -> Option<HCERTSTORE> {
     let store_name = wide("MY");
     let location = match identity {
         Identity::Machine => CERT_SYSTEM_STORE_LOCAL_MACHINE,
         Identity::User => CERT_SYSTEM_STORE_CURRENT_USER,
     };
-    let enc = CERT_QUERY_ENCODING_TYPE(X509_ASN_ENCODING.0 | PKCS_7_ASN_ENCODING.0);
-
-    // SAFETY: open the read-only system store, find the cert by subject substring,
-    // copy its DER, and free both the context and the store.
+    // SAFETY: open the read-only system store; the caller closes it.
     unsafe {
-        let store = CertOpenStore(
+        CertOpenStore(
             CERT_STORE_PROV_SYSTEM_W,
             CERT_QUERY_ENCODING_TYPE(0),
             None,
             CERT_OPEN_STORE_FLAGS(location | CERT_STORE_READONLY_FLAG.0),
             Some(store_name.as_ptr().cast::<c_void>()),
         )
-        .ok()?;
+        .ok()
+    }
+}
 
+/// Find the *exact* cert whose SHA-256 thumbprint matches `thumbprint` (uppercase
+/// hex), export its DER, and shell-open it. `None` if `thumbprint` is empty, the
+/// store can't be opened, or no cert matches.
+fn try_view_by_thumbprint(identity: Identity, thumbprint: &str) -> Option<()> {
+    if thumbprint.is_empty() {
+        return None;
+    }
+    let want = thumbprint.to_ascii_uppercase();
+    let store = open_store(identity)?;
+    let enc = CERT_QUERY_ENCODING_TYPE(X509_ASN_ENCODING.0 | PKCS_7_ASN_ENCODING.0);
+    // SAFETY: enumerate every cert in the store, comparing the Windows-computed
+    // SHA-256 hash; free each context (the next find frees the previous) and the store.
+    unsafe {
+        let mut found = None;
+        let mut ctx = CertFindCertificateInStore(store, enc, 0, CERT_FIND_ANY, None, None);
+        while !ctx.is_null() {
+            if cert_sha256_hex(ctx) == want {
+                let der =
+                    std::slice::from_raw_parts((*ctx).pbCertEncoded, (*ctx).cbCertEncoded as usize);
+                found = write_and_open(identity, der);
+                let _ = CertFreeCertificateContext(Some(ctx));
+                break;
+            }
+            ctx = CertFindCertificateInStore(store, enc, 0, CERT_FIND_ANY, None, Some(ctx));
+        }
+        let _ = CertCloseStore(Some(store), 0);
+        found
+    }
+}
+
+/// Fallback: find the first cert whose subject contains the CN, export its DER, and
+/// shell-open it. Less precise than the thumbprint match (no EKU filter), but works
+/// when no thumbprint was published.
+fn try_view_by_subject(identity: Identity, subject: &str) -> Option<()> {
+    let cn = common_name(subject);
+    if cn.is_empty() {
+        return None;
+    }
+    let cn_wide = wide(&cn);
+    let store = open_store(identity)?;
+    let enc = CERT_QUERY_ENCODING_TYPE(X509_ASN_ENCODING.0 | PKCS_7_ASN_ENCODING.0);
+    // SAFETY: find by subject substring, copy the DER, free the context and store.
+    unsafe {
         let ctx = CertFindCertificateInStore(
             store,
             enc,
@@ -71,7 +108,6 @@ fn try_view_exact(identity: Identity, subject: &str) -> Option<()> {
             Some(cn_wide.as_ptr().cast::<c_void>()),
             None,
         );
-
         let result = if ctx.is_null() {
             None
         } else {
@@ -83,6 +119,30 @@ fn try_view_exact(identity: Identity, subject: &str) -> Option<()> {
         };
         let _ = CertCloseStore(Some(store), 0);
         result
+    }
+}
+
+/// The Windows-computed SHA-256 hash of a cert context, as uppercase hex (or empty).
+///
+/// # Safety
+/// `ctx` must be a valid cert context.
+unsafe fn cert_sha256_hex(ctx: *const CERT_CONTEXT) -> String {
+    let mut buf = [0u8; 32];
+    let mut len = buf.len() as u32;
+    // SAFETY: `ctx` is a valid cert context; `buf` holds the 32-byte SHA-256.
+    let ok = unsafe {
+        CertGetCertificateContextProperty(
+            ctx,
+            CERT_SHA256_HASH_PROP_ID,
+            Some(buf.as_mut_ptr().cast::<c_void>()),
+            &mut len,
+        )
+    }
+    .is_ok();
+    if ok && len as usize == buf.len() {
+        buf.iter().map(|b| format!("{b:02X}")).collect()
+    } else {
+        String::new()
     }
 }
 
