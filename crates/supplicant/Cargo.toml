@@ -14,7 +14,7 @@ pac = { path = "../pac" }
 rustls = { version = "0.23", default-features = false, features = ["std", "aws_lc_rs"] }
 
 [dev-dependencies]
-rcgen = "0.13"
+rcgen = "0.14"
 creds = { path = "../creds" }
 aws-lc-rs = "1"
 teap-test-harness = { path = "../teap-test-harness" }

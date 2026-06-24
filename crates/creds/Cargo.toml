@@ -22,7 +22,7 @@ windows = { version = "0.62", features = [
 ] }
 
 [dev-dependencies]
-rcgen = "0.13"
+rcgen = "0.14"
 
 # This crate cannot use the workspace `unsafe_code = forbid` lint because the
 # Windows CNG/smartcard FFI requires `unsafe`. We mirror the security baseline
